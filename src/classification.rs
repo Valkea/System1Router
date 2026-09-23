@@ -2,7 +2,13 @@ use crate::{config::{Config, LayaConfig}, protocol::{ClassificationConfidence, P
 pub use crate::redaction::ProviderInput;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::{process::{Command, Stdio}, time::{Duration, Instant}};
+use std::{
+    fs::{self, OpenOptions},
+    io::Write,
+    path::PathBuf,
+    process::{Command, Stdio},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProviderHealth {
@@ -94,13 +100,16 @@ impl DecisionProvider for JevProvider {
     fn name(&self) -> &str { "jev" }
     fn health(&self) -> ProviderHealth { ProviderHealth { available: true, provider: "jev".into(), message: format!("configured endpoint {}", redact_endpoint(&self.endpoint)) } }
     fn classify(&self, input: &ProviderInput, timeout: Duration) -> Result<RoutingClassification, ProviderError> {
+        let body = typesafe_request(input, self.model.as_deref());
+        verbose_exchange("request", &body);
         if let Ok(response) = std::env::var("SYSTEM1ROUTER_JEV_RESPONSE") {
+            if let Ok(value) = serde_json::from_str::<Value>(&response) { verbose_exchange("response", &value); }
             let value: RoutingClassification = serde_json::from_str(&response).map_err(|e| ProviderError::Malformed(format!("Jev response: {e}")))?;
             return validate_classification(value, &input.correlation_id);
         }
-        let body = typesafe_request(input, self.model.as_deref());
         let token = self.credential_env.as_ref().and_then(|name| std::env::var(name).ok());
         let response = post_json(&self.endpoint, &body, token.as_deref(), timeout)?;
+        verbose_exchange("response", &response);
         let result = if response.get("answers").is_some() {
             parse_typesafe_classification(&response, &input.correlation_id)?
         } else {
@@ -171,7 +180,46 @@ pub fn validate_classification(mut result: RoutingClassification, correlation_id
 }
 
 fn redact_endpoint(endpoint: &str) -> String {
-    endpoint.split('?').next().unwrap_or(endpoint).to_string()
+    let without_query = endpoint.split(['?', '#']).next().unwrap_or(endpoint);
+    let Some((scheme, rest)) = without_query.split_once("://") else { return without_query.to_string(); };
+    let (authority, path) = rest.find('/').map(|index| (&rest[..index], &rest[index..])).unwrap_or((rest, ""));
+    let authority = authority.rsplit('@').next().unwrap_or(authority);
+    format!("{scheme}://{authority}{path}")
+}
+
+fn verbose_exchange(direction: &str, body: &Value) {
+    if std::env::var("SYSTEM1ROUTER_VERBOSE").ok().as_deref() != Some("1") { return; }
+    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).map(|value| value.as_millis()).unwrap_or_default();
+    let entry = json!({ "timestampMs": timestamp, "provider": "jev", "direction": direction, "body": body });
+    let Ok(line) = serde_json::to_string(&entry) else { return; };
+    eprintln!("[system1router] Jev {direction}: {body}");
+    let Some(path) = verbose_log_path() else { return; };
+    let Some(parent) = path.parent() else { return; };
+    if fs::create_dir_all(parent).is_err() { return; }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
+    }
+    if fs::metadata(&path).is_ok_and(|metadata| metadata.len() > 2 * 1024 * 1024) {
+        let rotated = PathBuf::from(format!("{}.1", path.display()));
+        let _ = fs::remove_file(&rotated);
+        let _ = fs::rename(&path, rotated);
+    }
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = file.set_permissions(fs::Permissions::from_mode(0o600));
+        }
+        let _ = writeln!(file, "{line}");
+    }
+}
+
+fn verbose_log_path() -> Option<PathBuf> {
+    if let Ok(path) = std::env::var("SYSTEM1ROUTER_VERBOSE_LOG") { return Some(PathBuf::from(path)); }
+    if let Ok(base) = std::env::var("XDG_STATE_HOME") { return Some(PathBuf::from(base).join("system1router/provider-debug.jsonl")); }
+    std::env::var("HOME").ok().map(|home| PathBuf::from(home).join(".local/state/system1router/provider-debug.jsonl"))
 }
 
 fn post_json(endpoint: &str, body: &serde_json::Value, bearer: Option<&str>, timeout: Duration) -> Result<serde_json::Value, ProviderError> {
@@ -181,8 +229,15 @@ fn post_json(endpoint: &str, body: &serde_json::Value, bearer: Option<&str>, tim
         request = request.set("Authorization", &format!("Bearer {value}"));
     }
     let response = request.send_json(body).map_err(|error| match error {
-        ureq::Error::Status(status, _) => ProviderError::Transport(format!("provider returned status {status}")),
-        ureq::Error::Transport(error) => ProviderError::Transport(format!("provider request failed: {error}")),
+        ureq::Error::Status(status, _) => {
+            verbose_exchange("error", &json!({ "status": status }));
+            ProviderError::Transport(format!("provider returned status {status}"))
+        }
+        ureq::Error::Transport(error) => {
+            verbose_exchange("error", &json!({ "type": "transport" }));
+            let message = error.to_string().replace(endpoint, &redact_endpoint(endpoint));
+            ProviderError::Transport(format!("provider request failed: {message}"))
+        }
     })?;
     response.into_json().map_err(|error| ProviderError::Malformed(format!("provider response JSON: {error}")))
 }

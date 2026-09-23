@@ -15,6 +15,8 @@ Installers add one ownership-marked entry and preserve unrelated configuration. 
 
 OpenCode's server plugin is registered in `.opencode/opencode.json`; its TUI dialog plugin is registered in `.opencode/tui.json`. The server hook pauses the incoming message before it is saved or sent to the model. The native confirmation dialog shows the current model, recommendation, variant, and reason. Confirm uses the recommendation for that request; cancel, timeout, or a missing TUI keeps the current model. The project must be opened in the interactive OpenCode TUI for this dialog; headless runs fail open without switching.
 
+Use `/s1router_toggle` to flip `routing.enabled` in the active JSON config and `/s1router_verbose` to show redacted Jev request/response traces inline with each prompt. Trace parts are ignored by model context. `/s1router_config` and `/s1router_logs` show the file path and offer Copy/Cancel; Copy writes the path to the system clipboard. `/system1router` (alias `/s1router`) opens the control panel; `/system1router-verbose` and `/s1r-verbose` remain aliases for verbose mode. Full verbose exchanges are also written to `~/.local/state/system1router/provider-debug.jsonl` (or `$XDG_STATE_HOME/system1router/provider-debug.jsonl`) with private permissions. The native executable reads config and `.env` on each request; OpenCode plugin files and TUI config are loaded at startup and need a restart.
+
 ## Generic hook contract
 
 ```sh

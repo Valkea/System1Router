@@ -73,4 +73,6 @@ Use `command` when System1Router should launch the local worker. Use `baseUrl` w
 
 Telemetry is local and redacted. Set `telemetry.enabled` to `false` or `SYSTEM1ROUTER_TELEMETRY_DISABLED=1` to disable it. Debug capture requires both `telemetry.debugCapture: true` and `SYSTEM1ROUTER_DEBUG_CAPTURE=1`; even then only the bounded, redacted request projection is stored. Credentials, raw tool arguments, attachments, and model output are never captured by this path.
 
+For provider troubleshooting, use `/system1router` in the OpenCode TUI to toggle verbose Jev exchange logging and view the latest request/response records. The request log contains the bounded, redacted prompt projection but never the bearer token. Logs are stored in `~/.local/state/system1router/provider-debug.jsonl` (or `$XDG_STATE_HOME/system1router/provider-debug.jsonl`) and rotate after 2 MiB. Disable verbose logging after diagnosis.
+
 Consent values are `interactive`, `always-accept`, `always-decline`, or `disabled`. Interactive one-shot hooks decline when no supported UI is available. Tests and host UIs may set `SYSTEM1ROUTER_CONSENT=accept` or `decline` for one request.

@@ -109,6 +109,8 @@ system1router init --host generic
 
 Use `--host-config /path/to/host-config.json` for a test or non-default host configuration. OpenCode loads the server and TUI entries from `.opencode/opencode.json` and `.opencode/tui.json`; ensure `system1router` is on `PATH` and restart OpenCode after plugin changes. In the interactive TUI, System1Router displays a native Yes/Cancel confirmation before generation. Accepting applies the recommended model and variant to that same request; declining or timing out keeps the current model. Headless OpenCode runs fail open without changing models.
 
+Use `/s1router_toggle` in the OpenCode TUI to turn routing on or off; it flips `routing.enabled` in the active JSON config. `/s1router_verbose` toggles verbose traces; when enabled, each prompt shows its redacted Jev request/response in the chat, excluded from model context. `/s1router_config` and `/s1router_logs` show the current file path and offer **Copy** / **Cancel**; Copy places the path in the system clipboard. `/system1router` (alias `/s1router`) opens the same controls. Full verbose exchanges are also stored in `~/.local/state/system1router/provider-debug.jsonl` (or `$XDG_STATE_HOME/system1router/provider-debug.jsonl`) with private file permissions. The native executable reads `config.json` and `.env` for every request; OpenCode plugin/TUI changes require restarting OpenCode.
+
 Smoke-test the normalized protocol without intercepting a real client:
 
 ```sh
