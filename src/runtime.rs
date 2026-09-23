@@ -6,7 +6,7 @@ pub fn process_event(event: &NormalizedEvent, config: &Config, provider: &dyn De
     let id = correlation_id(event);
     let capability = event.capabilities.level.clone();
     let base = |outcome: DecisionOutcome, diagnostic: Diagnostic, classification: Option<&crate::protocol::RoutingClassification>, mode: RoutingMode, policy_outcome: &str| NormalizedDecision {
-        protocol_version: crate::protocol::PROTOCOL_VERSION.into(), correlation_id: id.clone(), outcome, recommendation: None, consent: None, capability: capability.clone(), diagnostic, telemetry: Some(RoutingEvent { correlation_id: id.clone(), host: event.host.clone(), routing_class: classification.map(|value| value.routing_class.clone()), task_type: classification.map(|value| value.task_type.clone()), mode, policy_outcome: policy_outcome.into(), latency_ms: started.elapsed().as_millis() as u64, error_category: None, debug_capture: None }),
+        protocol_version: crate::protocol::PROTOCOL_VERSION.into(), correlation_id: id.clone(), outcome, recommendation: None, consent: None, capability: capability.clone(), diagnostic, telemetry: Some(RoutingEvent { correlation_id: id.clone(), host: event.host.clone(), routing_class: classification.map(|value| value.routing_class.clone()), task_type: classification.map(|value| value.task_type.clone()), mode, policy_outcome: policy_outcome.into(), latency_ms: started.elapsed().as_millis() as u64, error_category: None, model: None, suggested_model: None, accepted: None, debug_capture: None }),
     };
 
     if event.protocol_version != crate::protocol::PROTOCOL_VERSION {
@@ -18,7 +18,9 @@ pub fn process_event(event: &NormalizedEvent, config: &Config, provider: &dyn De
     if !config.routing.enabled {
         return base(DecisionOutcome::Bypass, Diagnostic::info("disabled", "routing is disabled"), None, RoutingMode::Advisory, "disabled");
     }
-    let classification = match classify_event(provider, event, config) {
+    let mut classified_event = event.clone();
+    classified_event.correlation_id = Some(id.clone());
+    let classification = match classify_event(provider, &classified_event, config) {
         Ok(value) => value,
         Err(error) => return classification_failure(base, error, config.routing.fail_open),
     };
@@ -79,5 +81,5 @@ pub fn diagnostic_summary(event: &NormalizedEvent, config: &Config, provider: &d
 }
 
 pub fn record_decision(decision: &NormalizedDecision, event: &NormalizedEvent, config: &Config) {
-    telemetry::record(decision.telemetry.as_ref(), event, config);
+    telemetry::record(decision, event, config);
 }

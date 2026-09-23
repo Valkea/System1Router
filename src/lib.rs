@@ -5,6 +5,7 @@ pub mod classification;
 pub mod consent;
 pub mod config;
 pub mod gateway;
+pub mod host_install;
 pub mod policy;
 pub mod protocol;
 pub mod redaction;

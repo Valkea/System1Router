@@ -84,6 +84,8 @@ pub struct JevProvider {
     pub endpoint: String,
     pub credential_env: Option<String>,
     pub model: Option<String>,
+    pub state_template: Option<String>,
+    pub questions: Option<Value>,
 }
 
 impl JevProvider {
@@ -92,7 +94,7 @@ impl JevProvider {
         if let Some(key) = &config.providers.jev.credential_env {
             if std::env::var(key).ok().filter(|value| !value.trim().is_empty()).is_none() { return Err(ProviderError::Unavailable("Jev credential is not available".into())); }
         }
-        Ok(Self { endpoint, credential_env: config.providers.jev.credential_env.clone(), model: config.providers.jev.model.clone() })
+        Ok(Self { endpoint, credential_env: config.providers.jev.credential_env.clone(), model: config.providers.jev.model.clone(), state_template: config.providers.jev.state_template.clone(), questions: config.providers.jev.questions.clone() })
     }
 }
 
@@ -100,11 +102,14 @@ impl DecisionProvider for JevProvider {
     fn name(&self) -> &str { "jev" }
     fn health(&self) -> ProviderHealth { ProviderHealth { available: true, provider: "jev".into(), message: format!("configured endpoint {}", redact_endpoint(&self.endpoint)) } }
     fn classify(&self, input: &ProviderInput, timeout: Duration) -> Result<RoutingClassification, ProviderError> {
-        let body = typesafe_request(input, self.model.as_deref());
+        let body = typesafe_request(input, self);
         verbose_exchange("request", &body);
         if let Ok(response) = std::env::var("SYSTEM1ROUTER_JEV_RESPONSE") {
-            if let Ok(value) = serde_json::from_str::<Value>(&response) { verbose_exchange("response", &value); }
-            let value: RoutingClassification = serde_json::from_str(&response).map_err(|e| ProviderError::Malformed(format!("Jev response: {e}")))?;
+            let value: Value = serde_json::from_str(&response).map_err(|e| ProviderError::Malformed(format!("Jev response: {e}")))?;
+            verbose_exchange("response", &value);
+            let value: RoutingClassification = if value.get("answers").is_some() {
+                parse_typesafe_classification(&value, &input.correlation_id)?
+            } else { serde_json::from_value(value).map_err(|e| ProviderError::Malformed(format!("Jev response: {e}")))? };
             return validate_classification(value, &input.correlation_id);
         }
         let token = self.credential_env.as_ref().and_then(|name| std::env::var(name).ok());
@@ -134,7 +139,7 @@ impl LayaProvider {
 
 impl DecisionProvider for LayaProvider {
     fn name(&self) -> &str { "laya" }
-    fn health(&self) -> ProviderHealth { ProviderHealth { available: self.config.command.is_some() || self.config.endpoint.is_some(), provider: "laya".into(), message: if self.config.command.is_some() { "local worker configured".into() } else if self.config.endpoint.is_some() { "configured local endpoint".into() } else { "local worker unavailable".into() } } }
+    fn health(&self) -> ProviderHealth { ProviderHealth { available: self.config.command.is_some() || self.config.endpoint.is_some() || self.config.base_url.is_some(), provider: "laya".into(), message: if self.config.command.is_some() { "local worker configured".into() } else if self.config.endpoint.is_some() || self.config.base_url.is_some() { "configured local endpoint".into() } else { "local worker unavailable".into() } } }
     fn classify(&self, input: &ProviderInput, timeout: Duration) -> Result<RoutingClassification, ProviderError> {
         if self.config.command.is_none() {
             let endpoint = self.config.endpoint.as_ref().or(self.config.base_url.as_ref()).ok_or_else(|| ProviderError::Unavailable("Laya local worker endpoint is missing".into()))?;
@@ -219,7 +224,10 @@ fn verbose_exchange(direction: &str, body: &Value) {
 fn verbose_log_path() -> Option<PathBuf> {
     if let Ok(path) = std::env::var("SYSTEM1ROUTER_VERBOSE_LOG") { return Some(PathBuf::from(path)); }
     if let Ok(base) = std::env::var("XDG_STATE_HOME") { return Some(PathBuf::from(base).join("system1router/provider-debug.jsonl")); }
-    std::env::var("HOME").ok().map(|home| PathBuf::from(home).join(".local/state/system1router/provider-debug.jsonl"))
+    #[cfg(windows)]
+    { std::env::var("APPDATA").ok().map(|base| PathBuf::from(base).join("system1router/provider-debug.jsonl")) }
+    #[cfg(not(windows))]
+    { std::env::var("HOME").ok().map(|home| PathBuf::from(home).join(".local/state/system1router/provider-debug.jsonl")) }
 }
 
 fn post_json(endpoint: &str, body: &serde_json::Value, bearer: Option<&str>, timeout: Duration) -> Result<serde_json::Value, ProviderError> {
@@ -242,12 +250,10 @@ fn post_json(endpoint: &str, body: &serde_json::Value, bearer: Option<&str>, tim
     response.into_json().map_err(|error| ProviderError::Malformed(format!("provider response JSON: {error}")))
 }
 
-fn typesafe_request(input: &ProviderInput, model: Option<&str>) -> Value {
+fn typesafe_request(input: &ProviderInput, provider: &JevProvider) -> Value {
     let context = serde_json::to_string(&input.context).unwrap_or_else(|_| "{}".into());
-    json!({
-        "state": format!("{}\n\nBounded context: {context}", input.query),
-        "model": model.unwrap_or("jev-latest"),
-        "questions": {
+    let state = render_state(provider.state_template.as_deref().unwrap_or("{query}\n\nBounded context: {context}"), &input.query, &context);
+    let questions = provider.questions.clone().unwrap_or_else(|| json!({
             "routing_class": {
                 "type": "choice",
                 "instructions": "Choose exactly one routing class for this request.",
@@ -280,8 +286,29 @@ fn typesafe_request(input: &ProviderInput, model: Option<&str>) -> Value {
                     "Substantial project context is required."
                 ]
             }
+        }));
+    json!({ "state": state, "model": provider.model.as_deref().unwrap_or("jev-latest"), "questions": questions })
+}
+
+fn render_state(template: &str, query: &str, context: &str) -> String {
+    let mut output = String::new();
+    let mut rest = template;
+    while let Some(start) = rest.find('{') {
+        output.push_str(&rest[..start]);
+        rest = &rest[start..];
+        if let Some(next) = rest.strip_prefix("{query}") {
+            output.push_str(query);
+            rest = next;
+        } else if let Some(next) = rest.strip_prefix("{context}") {
+            output.push_str(context);
+            rest = next;
+        } else {
+            output.push('{');
+            rest = &rest[1..];
         }
-    })
+    }
+    output.push_str(rest);
+    output
 }
 
 fn parse_typesafe_classification(response: &Value, correlation_id: &str) -> Result<RoutingClassification, ProviderError> {
@@ -344,5 +371,19 @@ mod tests {
         assert_eq!(result.routing_class, RoutingClass::CodeHard);
         assert_eq!(result.task_type, "debugging");
         assert_eq!(result.provider_metadata.model.as_deref(), Some("jev-1.13.0"));
+    }
+
+    #[test]
+    fn custom_state_and_questions_use_redacted_input() {
+        let provider = JevProvider {
+            endpoint: "http://localhost".into(), credential_env: None, model: None,
+            state_template: Some("Decide: {query}; context: {context}".into()),
+            questions: Some(json!({ "routing_class": { "type": "choice" }, "task_type": { "type": "choice" }, "context": { "type": "score" } })),
+        };
+        let input = ProviderInput { query: "[REDACTED]".into(), context: Default::default(), correlation_id: "c".into() };
+        let body = typesafe_request(&input, &provider);
+        assert!(body["state"].as_str().unwrap().starts_with("Decide: [REDACTED]; context:"));
+        assert_eq!(body["questions"], provider.questions.unwrap());
+        assert_eq!(render_state("{query} {context}", "literal {context}", "literal {query}"), "literal {context} literal {query}");
     }
 }

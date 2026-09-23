@@ -51,11 +51,46 @@ pub fn project_event(event: &NormalizedEvent, config: &RedactionConfig) -> Provi
     let context = event.context.clone();
     let context_json = serde_json::to_value(context).unwrap_or(Value::Null);
     let context_json = redact_value(&context_json, config);
-    let context: BoundedContext = serde_json::from_value(context_json).unwrap_or_default();
+    let mut context: BoundedContext = serde_json::from_value(context_json).unwrap_or_default();
+    // Apply a shared budget across fields, including metadata and file lists.
+    let mut remaining = config.max_context_chars;
+    for field in [&mut context.conversation_summary, &mut context.project_summary, &mut context.project_id,
+        &mut context.repository, &mut context.branch] {
+        if let Some(text) = field { *text = take_budget(text, &mut remaining); }
+    }
+    for values in [&mut context.files, &mut context.tools] {
+        for item in values.iter_mut() { *item = take_budget(item, &mut remaining); }
+        values.retain(|item| !item.is_empty());
+    }
+    context.metadata = bound_value(&context.metadata, &mut remaining);
     ProviderInput {
         query: truncate(&redact_text(&event.request.query, config), config.max_query_chars),
         context,
         correlation_id: crate::protocol::correlation_id(event),
+    }
+}
+
+fn take_budget(text: &str, remaining: &mut usize) -> String {
+    let bounded: String = text.chars().take(*remaining).collect();
+    *remaining -= bounded.chars().count();
+    bounded
+}
+
+fn bound_value(value: &Value, remaining: &mut usize) -> Value {
+    if *remaining == 0 { return Value::Null; }
+    match value {
+        Value::String(text) => Value::String(take_budget(text, remaining)),
+        Value::Array(items) => {
+            let mut output = Vec::new();
+            for item in items { if *remaining == 0 { break; } output.push(bound_value(item, remaining)); }
+            Value::Array(output)
+        }
+        Value::Object(items) => {
+            let mut output = Map::new();
+            for (key, item) in items { if *remaining == 0 { break; } output.insert(key.clone(), bound_value(item, remaining)); }
+            Value::Object(output)
+        }
+        _ => value.clone(),
     }
 }
 
@@ -77,5 +112,17 @@ mod tests {
         let result = redact_text("use sk-abc123 and token=secret", &config);
         assert!(!result.contains("abc123"));
         assert!(!result.contains("secret"));
+    }
+    #[test]
+    fn provider_input_bounds_context_and_keeps_correlations() {
+        let mut event = crate::adapters::normalize(crate::adapters::Host::Generic, serde_json::json!({ "prompt": "hello" }), None);
+        event.correlation_id = Some("same-request".into());
+        event.context.project_summary = Some("x".repeat(100));
+        event.context.files = vec!["sensitive-file".into()];
+        let config = RedactionConfig { max_context_chars: 10, ..Default::default() };
+        let result = project_event(&event, &config);
+        assert_eq!(result.correlation_id, "same-request");
+        assert_eq!(result.context.project_summary.as_deref(), Some("xxxxxxxxxx"));
+        assert!(result.context.files.is_empty());
     }
 }

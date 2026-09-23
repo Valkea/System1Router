@@ -6,16 +6,20 @@ pub enum PolicyResolution { Recommendation(Recommendation), Bypass(String), Unav
 pub fn resolve(classification: &RoutingClassification, event: &NormalizedEvent, config: &Config) -> PolicyResolution {
     let mut indexed: Vec<(usize, &PolicyRule)> = config.rules.iter().enumerate().collect();
     indexed.sort_by_key(|(index, rule)| (rule.priority, *index));
+    let mut unavailable = false;
     for (_, rule) in indexed {
         if !matches_rule(rule, classification, event) { continue; }
         if let Some(recommendation) = materialize(rule.id.clone(), rule.mode.clone().unwrap_or(config.routing.default_mode.clone()), &rule.target, rule.reason.clone(), classification, event, &event.catalog, config) {
             return recommendation;
         }
+        unavailable = true;
     }
     let default = &config.default_recommendation;
     if let Some(target) = &default.target {
         if let Some(recommendation) = materialize("default".into(), default.mode.clone().unwrap_or(config.routing.default_mode.clone()), target, default.reason.clone(), classification, event, &event.catalog, config) { return recommendation; }
+        unavailable = true;
     }
+    if unavailable { return PolicyResolution::Unavailable("matching target is absent from the host model catalog or gateway allowlist".into()); }
     PolicyResolution::Bypass("no eligible policy rule matched".into())
 }
 
@@ -52,7 +56,8 @@ fn materialize(rule_id: String, mode: RoutingMode, target: &crate::protocol::Pol
     if available.is_none() { return None; }
     if let Some(variant) = &target.variant { if available.is_some_and(|candidate| !candidate.variants.is_empty() && !candidate.variants.contains(variant)) { return None; } }
     let negotiated = negotiate_mode(mode, &event.capabilities, config);
-    Some(PolicyResolution::Recommendation(Recommendation { rule_id, mode: negotiated, provider: Some(provider), model: Some(model.clone()), variant: target.variant.clone(), gateway_target: None, reason: reason.unwrap_or_else(|| "policy match".into()), routing_class: classification.routing_class.clone(), task_type: classification.task_type.clone(), confidence: classification.confidence.clone() }))
+    let explanation = reason.unwrap_or_else(|| format!("Rule {rule_id} matched {} ({})", classification.routing_class, classification.task_type));
+    Some(PolicyResolution::Recommendation(Recommendation { rule_id, mode: negotiated, provider: Some(provider), model: Some(model.clone()), variant: target.variant.clone(), gateway_target: None, reason: explanation, routing_class: classification.routing_class.clone(), task_type: classification.task_type.clone(), confidence: classification.confidence.clone() }))
 }
 
 fn negotiate_mode(mode: RoutingMode, capabilities: &crate::protocol::CapabilityHints, config: &Config) -> RoutingMode {
@@ -79,4 +84,5 @@ mod tests {
         (config, event, classification)
     }
     #[test] fn first_matching_rule_wins() { let (config, event, classification) = fixture(); assert!(matches!(resolve(&classification, &event, &config), PolicyResolution::Recommendation(_))); }
+    #[test] fn reports_missing_catalog_target() { let (config, mut event, classification) = fixture(); event.catalog.models.clear(); assert!(matches!(resolve(&classification, &event, &config), PolicyResolution::Unavailable(_))); }
 }

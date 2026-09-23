@@ -30,10 +30,17 @@ pub struct JevConfig {
     pub credential_env: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    /// Text sent as System One's state. {query} and {context} are replaced
+    /// after the request has been bounded and redacted.
+    #[serde(default)]
+    pub state_template: Option<String>,
+    /// Optional replacement for the System One routing questions.
+    #[serde(default)]
+    pub questions: Option<serde_json::Value>,
 }
 
 impl Default for JevConfig {
-    fn default() -> Self { Self { endpoint: None, base_url: None, credential_env: default_jev_credential_env(), model: None } }
+    fn default() -> Self { Self { endpoint: None, base_url: None, credential_env: default_jev_credential_env(), model: None, state_template: None, questions: None } }
 }
 
 fn default_jev_credential_env() -> Option<String> { Some("JEV_API_KEY".into()) }
@@ -248,6 +255,19 @@ impl Config {
         if self.timeouts.provider_ms == 0 || self.timeouts.hook_ms == 0 { return Err("timeouts must be greater than zero".into()); }
         if self.redaction.max_query_chars == 0 || self.redaction.max_context_chars == 0 { return Err("redaction limits must be greater than zero".into()); }
         if !(0.0..=1.0).contains(&self.routing.min_confidence) { return Err("routing.minConfidence must be between 0 and 1".into()); }
+        if let Some(template) = &self.providers.jev.state_template {
+            if !template.contains("{query}") || template.len() > 8_000 { return Err("providers.jev.stateTemplate must contain {query} and be at most 8000 bytes".into()); }
+        }
+        if let Some(questions) = &self.providers.jev.questions {
+            let routing = &questions["routing_class"];
+            let task = &questions["task_type"];
+            let context = &questions["context"];
+            if routing["type"] != "choice" || task["type"] != "choice" || context["type"] != "score" ||
+                RoutingClass::ALL.iter().any(|class| !routing["criteria"][class.as_str()].is_string()) ||
+                !task["criteria"].is_object() || !context["criteria"].is_array() {
+                return Err("providers.jev.questions must keep the six routing classes, choice task_type and score context".into());
+            }
+        }
         let mut ids = std::collections::HashSet::new();
         for rule in &self.rules {
             if rule.id.trim().is_empty() || !ids.insert(&rule.id) { return Err(format!("rule IDs must be unique: {}", rule.id)); }
@@ -401,5 +421,15 @@ mod tests {
         assert_eq!(env::var(existing_key).unwrap(), "process-value");
         env::remove_var(fallback_key);
         env::remove_var(existing_key);
+    }
+
+    #[test]
+    fn rejects_unusable_jev_customization() {
+        let mut config = Config::default();
+        config.providers.jev.state_template = Some("no user prompt".into());
+        assert!(config.validate().is_err());
+        config.providers.jev.state_template = Some("{query}".into());
+        config.providers.jev.questions = Some(serde_json::json!({ "routing_class": {} }));
+        assert!(config.validate().is_err());
     }
 }

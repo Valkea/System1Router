@@ -1,0 +1,8 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    "caveman-opencode-plugin@latest",
+    "./plugins/graphify.js",
+    "./plugins/system1router/server.ts"
+  ]
+}

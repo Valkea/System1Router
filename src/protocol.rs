@@ -331,6 +331,12 @@ pub struct RoutingEvent {
     pub policy_outcome: String,
     pub latency_ms: u64,
     pub error_category: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggested_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accepted: Option<bool>,
     #[serde(default)]
     pub debug_capture: Option<Value>,
 }
