@@ -1,0 +1,8 @@
+{
+  "protocolVersion": "1",
+  "host": "generic",
+  "event": "user_prompt",
+  "sessionId": "generic-session",
+  "request": { "query": "List the project risks" },
+  "capabilities": { "level": "observe-only" }
+}

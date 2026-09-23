@@ -1,0 +1,7 @@
+{
+  "event": "UserPromptSubmit",
+  "sessionId": "codex-session",
+  "userPrompt": "Explain this error",
+  "modelId": "current-model",
+  "providerId": "provider"
+}

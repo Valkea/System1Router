@@ -1,0 +1,6 @@
+{
+  "event": "userPromptSubmitted",
+  "conversationId": "copilot-session",
+  "user_prompt": "Review this change",
+  "model": "current-model"
+}

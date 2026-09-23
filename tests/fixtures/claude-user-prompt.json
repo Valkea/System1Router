@@ -1,0 +1,7 @@
+{
+  "hookEventName": "UserPromptSubmit",
+  "session_id": "claude-session",
+  "prompt": "Fix the failing test",
+  "cwd": "/workspace/project",
+  "model": "current-model"
+}

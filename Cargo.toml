@@ -1,0 +1,24 @@
+[package]
+name = "system1router"
+version = "0.1.0"
+edition = "2021"
+description = "Context-aware model routing for AI coding clients"
+license = "MIT"
+rust-version = "1.78"
+
+[lib]
+name = "system1router_core"
+path = "src/lib.rs"
+
+[[bin]]
+name = "system1router"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+ureq = { version = "2.12", default-features = false, features = ["json", "tls"] }
+
+[dev-dependencies]
+tempfile = "3.13"

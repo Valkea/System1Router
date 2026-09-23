@@ -1,0 +1,43 @@
+{
+  "routing": {
+    "enabled": false,
+    "defaultMode": "advisory",
+    "failOpen": true,
+    "minConfidence": 0.0
+  },
+  "providers": {
+    "selected": "none",
+    "jev": { "baseUrl": "https://api.typesafe.ai/v1/systemone", "credentialEnv": "JEV_API_KEY", "model": "jev-latest" },
+    "laya": { "command": "laya-router-worker", "baseUrl": "http://127.0.0.1:8788/classify" }
+  },
+  "redaction": {
+    "maxQueryChars": 4000,
+    "maxContextChars": 4000,
+    "patterns": ["internal-secret-"]
+  },
+  "consent": { "mode": "interactive", "declineOnTimeout": true },
+  "gateway": {
+    "enabled": false,
+    "bind": "127.0.0.1:8765",
+    "authTokenEnv": "SYSTEM1ROUTER_GATEWAY_TOKEN",
+    "upstreamAllowlist": []
+  },
+  "telemetry": {
+    "enabled": true,
+    "debugCapture": false
+  },
+  "rules": [
+    {
+      "id": "hard-code-high-reasoning",
+      "priority": 10,
+      "routingClass": "code_hard",
+      "mode": "advisory",
+      "target": {
+        "provider": "openai",
+        "model": "gpt-5",
+        "variant": "high"
+      },
+      "reason": "Use the high-reasoning variant for complex code work"
+    }
+  ]
+}
