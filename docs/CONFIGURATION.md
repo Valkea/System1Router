@@ -63,13 +63,13 @@ Process environment variables take precedence. An empty key is treated as unconf
 
 The native provider transport supports HTTP and HTTPS URLs. Requests are bounded, redacted, and sent with a bearer token using TypeSafe System One's `state`, `model`, and `questions` schema. The adapter maps the returned `answers` into a normalized `RoutingClassification`. Remote provider calls allow up to 3 seconds by default; hook execution allows up to 6 seconds.
 
-Customize what System One receives under `providers.jev`. `stateTemplate` replaces the default state string; `{query}` is required and is replaced with the **bounded, redacted** user prompt, while `{context}` inserts bounded context. To change the classification criteria/instructions, `questions` replaces the entire TypeSafe questions object (it must contain `routing_class`, `task_type`, and `context`). Keep the six `routing_class` choice keys (`question_simple`, `question_moderate`, `question_hard`, `code_simple`, `code_moderate`, `code_hard`) and the same answer types so the reply remains routable. Example:
+Customize what System One receives under `providers.jev`. The default state places bounded conversation/project context before the **bounded, redacted** current request. `stateTemplate` replaces that order; `{query}` is required and `{context}` inserts bounded context. To change the classification criteria/instructions, `questions` replaces the entire TypeSafe questions object (it must contain `routing_class`, `task_type`, and `context`). Keep the six `routing_class` choice keys (`question_simple`, `question_moderate`, `question_hard`, `code_simple`, `code_moderate`, `code_hard`) and the same answer types so the reply remains routable. Example:
 
 ```json
 "jev": {
   "baseUrl": "https://api.typesafe.ai/v1/systemone",
   "credentialEnv": "JEV_API_KEY",
-  "stateTemplate": "Route this coding request: {query}\nRelevant project context: {context}",
+  "stateTemplate": "Relevant conversation/project context: {context}\n\nCurrent request: {query}",
   "questions": {
     "routing_class": { "type": "choice", "instructions": "Choose the smallest suitable reasoning tier for this task.", "criteria": { "question_simple": "Direct answer", "question_moderate": "Multi-step answer", "question_hard": "Deep research", "code_simple": "Local edit", "code_moderate": "Multi-file edit", "code_hard": "Complex debugging or architecture" } },
     "task_type": { "type": "choice", "instructions": "Choose the primary intent.", "criteria": { "code-generation": "Writing code", "debugging": "Fixing code", "question-answering": "Answering", "analysis": "Analyzing", "planning": "Planning" } },

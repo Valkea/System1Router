@@ -106,6 +106,8 @@ test("routes the same turn and counts actual acceptances, declines and missing U
     expect(acceptedDetails?.type).toBe("reasoning");
     expect(acceptedDetails?.text).toContain("Current message:\nMake a small change");
     expect(acceptedDetails?.text).toContain("We are implementing the parser.");
+    const verboseInput = acceptedDetails?.text ?? "";
+    expect(verboseInput.indexOf("Recent conversation:")).toBeLessThan(verboseInput.indexOf("Current message:"));
     expect(acceptedDetails?.text).toContain("The parser uses recursive descent.");
     expect(acceptedDetails?.text).toContain("Tool read (completed)");
     expect(acceptedDetails?.text).toContain('Input: {"filePath":"src/parser.rs"}');
@@ -115,10 +117,11 @@ test("routes the same turn and counts actual acceptances, declines and missing U
     const jevRequest = acceptedDetails?.text?.match(/Jev request:\n([\s\S]*?)\n\nJev response:/)?.[1];
     expect(jevRequest).toBeDefined();
     const providerInput = JSON.parse(jevRequest ?? "{}") as { state?: string };
-    const contextStart = providerInput.state?.indexOf("\n\nBounded context: ") ?? -1;
-    expect(contextStart).toBeGreaterThanOrEqual(0);
-    expect(providerInput.state?.slice(0, contextStart)).toBe("Make a small change");
-    const routedContext = JSON.parse(providerInput.state!.slice(contextStart + "\n\nBounded context: ".length)) as {
+    const currentRequestMarker = "\n\nCurrent request: ";
+    const currentRequestStart = providerInput.state?.lastIndexOf(currentRequestMarker) ?? -1;
+    expect(currentRequestStart).toBeGreaterThanOrEqual(0);
+    expect(providerInput.state?.slice(currentRequestStart + currentRequestMarker.length)).toBe("Make a small change");
+    const routedContext = JSON.parse(providerInput.state!.slice(0, currentRequestStart)) as {
       conversationSummary?: string;
       files?: string[];
       tools?: string[];

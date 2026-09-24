@@ -240,7 +240,7 @@ fn post_json(endpoint: &str, body: &serde_json::Value, bearer: Option<&str>, tim
 
 fn typesafe_request(input: &ProviderInput, provider: &JevProvider) -> Value {
     let context = serde_json::to_string(&input.context).unwrap_or_else(|_| "{}".into());
-    let state = render_state(provider.state_template.as_deref().unwrap_or("{query}\n\nBounded context: {context}"), &input.query, &context);
+    let state = render_state(provider.state_template.as_deref().unwrap_or("{context}\n\nCurrent request: {query}"), &input.query, &context);
     let questions = provider.questions.clone().unwrap_or_else(|| json!({
             "routing_class": {
                 "type": "choice",
@@ -373,5 +373,23 @@ mod tests {
         assert!(body["state"].as_str().unwrap().starts_with("Decide: [REDACTED]; context:"));
         assert_eq!(body["questions"], provider.questions.unwrap());
         assert_eq!(render_state("{query} {context}", "literal {context}", "literal {query}"), "literal {context} literal {query}");
+    }
+
+    #[test]
+    fn default_state_places_context_before_the_current_request() {
+        let provider = JevProvider {
+            endpoint: "http://localhost".into(), credential_env: None, model: None,
+            state_template: None, questions: None,
+        };
+        let input = ProviderInput {
+            query: "current request".into(),
+            context: crate::protocol::BoundedContext {
+                conversation_summary: Some("earlier conversation".into()),
+                ..Default::default()
+            },
+            correlation_id: "c".into(),
+        };
+        let state = typesafe_request(&input, &provider)["state"].as_str().unwrap().to_owned();
+        assert!(state.find("earlier conversation").unwrap() < state.find("Current request: current request").unwrap());
     }
 }

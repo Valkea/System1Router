@@ -42,10 +42,10 @@ function appendVerboseTrace<Part extends object>(
   startedAt: number,
 ): void {
   const input = [
-    `Current message:\n${query || "(no text input)"}`,
     context.conversationSummary ? `Recent conversation:\n${context.conversationSummary}` : undefined,
     context.tools.length ? `Tools used: ${context.tools.join(", ")}` : undefined,
     context.files.length ? `Files accessed: ${context.files.join(", ")}` : undefined,
+    `Current message:\n${query || "(no text input)"}`,
   ].filter(Boolean).join("\n\n");
   let text = [
     "System1Router verbose input/output",

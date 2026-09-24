@@ -11,7 +11,7 @@
       "baseUrl": "https://api.typesafe.ai/v1/systemone",
       "credentialEnv": "JEV_API_KEY",
       "model": "jev-latest",
-      "stateTemplate": "Classify the user's coding request for model routing. Request: {query}\nProject context: {context}"
+      "stateTemplate": "Project and conversation context: {context}\n\nCurrent request: {query}"
     },
     "laya": { "command": "laya-router-worker", "baseUrl": "http://127.0.0.1:8788/classify" }
   },
