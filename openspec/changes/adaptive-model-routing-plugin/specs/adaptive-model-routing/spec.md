@@ -18,7 +18,7 @@ The router SHALL support advisory, host full-override, and gateway routing modes
 
 #### Scenario: Host supports full override
 - **WHEN** policy selects host full-override and the adapter reports `full-override`
-- **THEN** the recommendation is eligible for consent and transactional execution
+- **THEN** the recommendation is eligible for consent and request-scoped execution
 
 #### Scenario: Host supports only advisory hooks
 - **WHEN** policy selects host full-override but the adapter reports `observe-only` or `consent-only`

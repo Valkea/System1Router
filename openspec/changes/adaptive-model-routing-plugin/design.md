@@ -34,7 +34,7 @@ Jev is a hosted System One decision service that returns typed choices and confi
 - Support hosted Jev and optional local Laya providers behind the same decision-provider interface.
 - Resolve deterministic model/variant recommendations from user-configured policy rules and available model catalogs.
 - Provide advisory hook mode for broad compatibility and provider-gateway mode for true per-request routing where a compatible endpoint is available.
-- Apply and restore host model state only through a verified `full-override` adapter capability.
+- Change the model/variant only for the current request through a verified request-scoped `full-override` capability.
 - Make privacy, timeouts, failures, unsupported host capabilities, and concurrency explicit and fail open.
 - Deliver integrations in priority order: OpenCode, Claude Code, Codex, GitHub Copilot CLI/VS Code, then additional generic hook-compatible clients.
 
@@ -74,16 +74,16 @@ Each adapter reports one of:
 
 - `observe-only`: classify and record, without affecting the request;
 - `consent-only`: present or inject a recommendation, but cannot apply a model override;
-- `full-override`: safely selects a model/variant for the current request and can restore it; or
+- `full-override`: safely selects a model/variant on the current request without changing persistent client selection; or
 - `gateway`: sends the request through a configured routing endpoint that selects the upstream model per request.
 
-The mode is detected and displayed by `doctor`. The core must never simulate full override by recursively submitting the prompt, mutating a future turn, or changing a global model without a transaction boundary.
+The mode is detected and displayed by `doctor`. The core must never simulate full override by recursively submitting the prompt, mutating a future turn, or changing persistent/global model selection.
 
 ### Provider gateway for true per-request routing
 
 The optional gateway exposes only provider-compatible endpoints that the selected client can use. It receives the original request, classifies it before forwarding, resolves an upstream model/variant, applies consent or policy, and forwards the original request to that upstream target. It must preserve streaming, tools, attachments, and response/error semantics supported by the chosen protocol.
 
-Gateway routing is per-request, so it does not need to mutate or restore a host-global model selection. The gateway must authenticate callers, restrict allowed upstream targets, avoid logging raw payloads, and fail according to explicit policy. Clients that cannot configure a compatible endpoint remain in advisory or host-adapter mode.
+Gateway routing is per-request and never mutates persistent host model selection. The gateway must authenticate callers, restrict allowed upstream targets, avoid logging raw payloads, and fail according to explicit policy. Clients that cannot configure a compatible endpoint remain in advisory or host-adapter mode.
 
 ### Shared core with host adapters
 
@@ -93,7 +93,6 @@ The core will expose pure routing operations and a small adapter interface:
 - `classify(envelope) -> RoutingClassification`
 - `recommend(classification, context, catalog, policy) -> Recommendation | bypass`
 - `requestConsent(recommendation, context) -> accept | decline | unavailable`
-- `executeWithOverride(recommendation, adapter, run) -> result`
 - `forwardThroughGateway(request, recommendation) -> response`
 
 Adapters own lifecycle hooks, model catalog discovery, current-state access, consent UI, model mutation, and protocol translation. This keeps provider and policy tests independent of host SDKs and prevents one client’s limitations from leaking into another.
@@ -112,18 +111,13 @@ The configuration format will support a menu-like matrix so users can favor a mo
 
 ### Consent as an adapter/protocol operation
 
-The core will request one decision per routed request. When a recommendation is eligible, an interactive adapter must explicitly offer two mutually exclusive choices: `use suggested model` or `keep current model`. It displays the classification summary, recommendation, confidence, reason, and the effect of each choice. Choosing `keep current model` is the safe decline path: it executes the request with the captured original selection and does not create an override transaction. A command hook may express the result through the host’s supported `allow`, `block`, `ask`, or context-injection response, but it must not claim that context injection changed the model. Default behavior for a missing or non-interactive consent channel is decline, unless an explicit non-interactive policy is configured.
+The core will request one decision per routed request. When a recommendation is eligible, an interactive adapter must explicitly offer two mutually exclusive choices: `use suggested model` or `keep current model`. It displays the classification summary, recommendation, confidence, reason, and the effect of each choice. Choosing `keep current model` is the safe decline path: it executes the request with the captured original selection and does not change the request model or route it through the gateway. A command hook may express the result through the host’s supported `allow`, `block`, `ask`, or context-injection response, but it must not claim that context injection changed the model. Default behavior for a missing or non-interactive consent channel is decline, unless an explicit non-interactive policy is configured.
 
-### Transactional host override and stateless gateway execution
+### Request-scoped host override and stateless gateway execution
 
-For `full-override` adapters, an accepted recommendation executes through a transaction:
+For `full-override` adapters, an accepted recommendation changes only the model/variant attached to the original request. The adapter must use a request-scoped host API; it must not alter persistent session or user model selection. Adapters that can only change persistent selection remain advisory or use the gateway.
 
-1. Snapshot the exact provider/model/variant and relevant host scope.
-2. Apply the recommendation through the adapter’s supported mutation mechanism.
-3. Execute the original request unchanged.
-4. Restore the snapshot in a `finally`-equivalent cleanup path.
-
-For `gateway` mode, the gateway forwards one request to the selected upstream target and performs no host-state mutation or restoration. Both modes are keyed by request/session and must not use one mutable global model state for concurrent sessions.
+For `gateway` mode, the gateway forwards one request to the selected upstream target and performs no host-state mutation. Both modes are scoped to a single request.
 
 ### Privacy and local telemetry
 
@@ -138,8 +132,7 @@ The provider and gateway boundaries receive only configured request fields, with
 - [Hook protocol breakage] Host schemas differ and evolve → version the normalized protocol, keep translators thin, and add fixture tests per host/version.
 - [Classifier error] A wrong routing class or contextual signal can select a weaker or more expensive model → require confidence thresholds, configurable safe defaults, explicit consent, and a one-click decline path.
 - [Provider availability] Jev credentials/network or Laya runtime may be unavailable → make providers optional and fail open to the pre-existing model.
-- [State corruption] A failed cleanup could leave a session on the recommended model → use per-request snapshots, restoration retries, and a visible diagnostic/error state.
-- [Concurrent requests] Shared mutable host state can cross-contaminate sessions → serialize overrides per host scope or use isolated request handles, and test overlapping requests explicitly.
+- [Persistent model changes] A host may expose only session-level model mutation → do not advertise full override for that host; use advisory or gateway routing.
 - [Sensitive prompt exposure] Classification or gateway forwarding may send user content to external services → prefer local Laya where configured, redact/truncate inputs, document provider data handling, and provide hard disable switches.
 
 ## Migration Plan
@@ -147,7 +140,7 @@ The provider and gateway boundaries receive only configured request fields, with
 1. Add the native executable, normalized protocol, and configuration with routing disabled by default; existing client behavior remains unchanged.
 2. Add `init`, `uninstall`, and `doctor` for Claude Code and Codex command hooks, then add Copilot/VS Code and the OpenCode plugin shim.
 3. Validate every adapter in observe-only mode against recorded event fixtures before enabling consent or routing responses.
-4. Add Jev and Laya providers independently, with a provider health command and no mandatory dependency on either runtime.
+4. Add Jev and Laya providers independently, with configuration diagnostics and no mandatory dependency on either runtime.
 5. Enable consent-based advisory routing for selected projects.
 6. Add gateway mode for compatible endpoints and enable full override only after a host capability probe confirms safe same-request mutation.
 7. Expand policy coverage gradually while collecting redacted diagnostics.

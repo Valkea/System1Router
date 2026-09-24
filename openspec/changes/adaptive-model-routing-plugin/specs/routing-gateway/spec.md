@@ -40,7 +40,7 @@ The gateway SHALL require explicit configuration, authenticate clients, restrict
 - **AND** the rejection contains no secret material
 
 ### Requirement: Keep gateway routing stateless with respect to host model selection
-Gateway execution SHALL not mutate or restore the client’s selected model or variant; the routed upstream target SHALL be scoped to the individual request.
+Gateway execution SHALL not mutate the client’s persistent model or variant; the routed upstream target SHALL be scoped to the individual request.
 
 #### Scenario: Two clients use different gateway routes
 - **WHEN** concurrent requests resolve to different upstream targets

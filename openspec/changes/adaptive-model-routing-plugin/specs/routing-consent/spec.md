@@ -19,7 +19,7 @@ For every eligible recommendation with an interactive consent channel, the adapt
 #### Scenario: User keeps the current model
 - **WHEN** the user chooses `keep current model`
 - **THEN** the request executes with the captured original provider, model, and variant or the host’s normal path
-- **AND** no temporary override, gateway route, or model-state restoration transaction is created
+- **AND** no model change or gateway route is executed
 
 #### Scenario: User uses the suggested model
 - **WHEN** the user chooses `use suggested model`
@@ -49,7 +49,7 @@ The router SHALL support configured interactive, always-accept, always-decline, 
 
 #### Scenario: User accepts interactively
 - **WHEN** the user selects accept
-- **THEN** the router proceeds with the eligible host override or gateway transaction
+- **THEN** the router proceeds with the eligible request-scoped host override or gateway route
 - **AND** the acceptance applies only to the current request unless policy was explicitly changed
 
 #### Scenario: User declines interactively

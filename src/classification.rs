@@ -10,13 +10,6 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ProviderHealth {
-    pub available: bool,
-    pub provider: String,
-    pub message: String,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderError {
     Unavailable(String),
@@ -40,7 +33,6 @@ impl std::fmt::Display for ProviderError {
 
 pub trait DecisionProvider: Send + Sync {
     fn name(&self) -> &str;
-    fn health(&self) -> ProviderHealth;
     fn classify(&self, input: &ProviderInput, timeout: Duration) -> Result<RoutingClassification, ProviderError>;
 }
 
@@ -64,7 +56,6 @@ impl UnavailableProvider {
 
 impl DecisionProvider for UnavailableProvider {
     fn name(&self) -> &str { &self.name }
-    fn health(&self) -> ProviderHealth { ProviderHealth { available: false, provider: self.name.clone(), message: self.reason.clone() } }
     fn classify(&self, _input: &ProviderInput, _timeout: Duration) -> Result<RoutingClassification, ProviderError> { Err(ProviderError::Unavailable(self.reason.clone())) }
 }
 
@@ -75,7 +66,6 @@ pub struct StaticProvider {
 
 impl DecisionProvider for StaticProvider {
     fn name(&self) -> &str { "static" }
-    fn health(&self) -> ProviderHealth { ProviderHealth { available: self.result.is_ok(), provider: "static".into(), message: "test provider".into() } }
     fn classify(&self, _input: &ProviderInput, _timeout: Duration) -> Result<RoutingClassification, ProviderError> { self.result.clone() }
 }
 
@@ -100,7 +90,6 @@ impl JevProvider {
 
 impl DecisionProvider for JevProvider {
     fn name(&self) -> &str { "jev" }
-    fn health(&self) -> ProviderHealth { ProviderHealth { available: true, provider: "jev".into(), message: format!("configured endpoint {}", redact_endpoint(&self.endpoint)) } }
     fn classify(&self, input: &ProviderInput, timeout: Duration) -> Result<RoutingClassification, ProviderError> {
         let body = typesafe_request(input, self);
         verbose_exchange("request", &body);
@@ -139,7 +128,6 @@ impl LayaProvider {
 
 impl DecisionProvider for LayaProvider {
     fn name(&self) -> &str { "laya" }
-    fn health(&self) -> ProviderHealth { ProviderHealth { available: self.config.command.is_some() || self.config.endpoint.is_some() || self.config.base_url.is_some(), provider: "laya".into(), message: if self.config.command.is_some() { "local worker configured".into() } else if self.config.endpoint.is_some() || self.config.base_url.is_some() { "configured local endpoint".into() } else { "local worker unavailable".into() } } }
     fn classify(&self, input: &ProviderInput, timeout: Duration) -> Result<RoutingClassification, ProviderError> {
         if self.config.command.is_none() {
             let endpoint = self.config.endpoint.as_ref().or(self.config.base_url.as_ref()).ok_or_else(|| ProviderError::Unavailable("Laya local worker endpoint is missing".into()))?;
@@ -184,14 +172,6 @@ pub fn validate_classification(mut result: RoutingClassification, correlation_id
     Ok(result)
 }
 
-fn redact_endpoint(endpoint: &str) -> String {
-    let without_query = endpoint.split(['?', '#']).next().unwrap_or(endpoint);
-    let Some((scheme, rest)) = without_query.split_once("://") else { return without_query.to_string(); };
-    let (authority, path) = rest.find('/').map(|index| (&rest[..index], &rest[index..])).unwrap_or((rest, ""));
-    let authority = authority.rsplit('@').next().unwrap_or(authority);
-    format!("{scheme}://{authority}{path}")
-}
-
 fn verbose_exchange(direction: &str, body: &Value) {
     if std::env::var("SYSTEM1ROUTER_VERBOSE").ok().as_deref() != Some("1") { return; }
     let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).map(|value| value.as_millis()).unwrap_or_default();
@@ -228,6 +208,14 @@ fn verbose_log_path() -> Option<PathBuf> {
     { std::env::var("APPDATA").ok().map(|base| PathBuf::from(base).join("system1router/provider-debug.jsonl")) }
     #[cfg(not(windows))]
     { std::env::var("HOME").ok().map(|home| PathBuf::from(home).join(".local/state/system1router/provider-debug.jsonl")) }
+}
+
+fn redact_endpoint(endpoint: &str) -> String {
+    let without_query = endpoint.split(['?', '#']).next().unwrap_or(endpoint);
+    let Some((scheme, rest)) = without_query.split_once("://") else { return without_query.to_string(); };
+    let (authority, path) = rest.find('/').map(|index| (&rest[..index], &rest[index..])).unwrap_or((rest, ""));
+    let authority = authority.rsplit('@').next().unwrap_or(authority);
+    format!("{scheme}://{authority}{path}")
 }
 
 fn post_json(endpoint: &str, body: &serde_json::Value, bearer: Option<&str>, timeout: Duration) -> Result<serde_json::Value, ProviderError> {

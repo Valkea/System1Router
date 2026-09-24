@@ -39,13 +39,11 @@
 - [x] 4.7 Implement host response translation for allow, block, ask, and context-injection outcomes without claiming unsupported model changes.
 - [x] 4.8 Add unit tests covering precedence, unavailable targets, mode fallback, defaults, unknown categories, consent timeout, and decline behavior.
 
-## 5. Host Override And Restoration
+## 5. Request-Scoped Host Override
 
-- [x] 5.1 Implement adapter model-state snapshots containing provider, model, variant, and host/session scope.
-- [x] 5.2 Implement accepted full-override execution with apply, unchanged request execution, and guaranteed restoration cleanup.
-- [x] 5.3 Add per-session transaction isolation, serialization or request handles for concurrent overrides, and recursion protection.
-- [x] 5.4 Implement restoration retries, verification, high-severity diagnostics, and safe behavior when apply fails before execution.
-- [x] 5.5 Add fault-injection tests for request failure, cancellation, apply failure, restoration failure, and overlapping sessions.
+- [x] 5.1 Apply accepted model/variant recommendations only to the original request through a verified request-scoped host API.
+- [x] 5.2 Preserve persistent client model selection and avoid duplicate prompt submission.
+- [x] 5.3 Test accepted and declined request-scoped model/variant routing.
 
 ## 6. Provider Gateway
 
@@ -62,7 +60,7 @@
 - [x] 7.2 Implement OpenCode model-catalog discovery and current provider/model/variant capture for the installed SDK version.
 - [x] 7.3 Implement the OpenCode consent UI/notification path with an explicit suggested-model/current-model choice when a supported interactive TUI channel is available, and redacted routing diagnostics using supported public APIs.
 - [x] 7.4 Implement the verified full-override path if the capability probe confirms one; otherwise expose observe-only or consent-only behavior without duplicate requests.
-- [x] 7.5 Add OpenCode integration tests for normal requests, recursion guards, model availability, accept/decline, restoration, gateway configuration, unsupported capability, and plugin-disabled behavior.
+- [x] 7.5 Add OpenCode integration tests for normal requests, recursion guards, model availability, accept/decline, request-scoped model/variant changes, gateway configuration, unsupported capability, and plugin-disabled behavior.
 - [x] 7.6 Add the OpenCode plugin/configuration entry and document installation, enablement, provider setup, gateway setup, and rollback.
 
 ## 8. Claude Code And Codex Integrations

@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Implement a common adapter contract
-Each client adapter SHALL expose lifecycle registration, request normalization, current model-state capture when available, model catalog discovery when available, consent translation, temporary override when supported, restoration when supported, capability reporting, installation metadata, and redacted diagnostics through the shared core contract.
+Each client adapter SHALL expose lifecycle registration, request normalization, current model-state capture when available, model catalog discovery when available, consent translation, request-scoped override when supported, capability reporting, installation metadata, and redacted diagnostics through the shared core contract.
 
 #### Scenario: Adapter passes contract validation
 - **WHEN** an adapter is loaded for a supported host
@@ -45,9 +45,9 @@ The client runtime SHALL load without Jev credentials, without a local Laya runt
 - **AND** the request follows the configured fail-open path without loading remote fallback implicitly
 
 ### Requirement: Expose safe configuration and diagnostics
-Adapters SHALL load configuration from documented host-appropriate locations, SHALL keep secrets in host-supported secret storage or environment variables, and SHALL provide a diagnostic view of installation status, capability, provider health, active policy, gateway status, and last routing outcome without raw request content.
+Adapters SHALL load configuration from documented host-appropriate locations, SHALL keep secrets in host-supported secret storage or environment variables, and SHALL provide a diagnostic view of installation status, capability, provider configuration, active policy, gateway status, and last routing outcome without raw request content.
 
 #### Scenario: User inspects routing diagnostics
 - **WHEN** the user runs the diagnostic command
-- **THEN** the output includes installed hosts, capability levels, provider availability, policy status, and redacted recent outcomes
+- **THEN** the output includes installed hosts, capability levels, selected provider configuration, policy status, and redacted recent outcomes
 - **AND** it excludes credentials and raw prompts by default

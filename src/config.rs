@@ -1,4 +1,4 @@
-use crate::protocol::{GatewayTarget, ModelCatalog, PolicyTarget, RoutingClass, RoutingMode};
+use crate::protocol::{GatewayTarget, PolicyTarget, RoutingClass, RoutingMode};
 use serde::{Deserialize, Serialize};
 use std::{env, fs, path::{Path, PathBuf}};
 
@@ -91,17 +91,14 @@ pub struct TimeoutConfig {
     pub hook_ms: u64,
     #[serde(default = "default_consent_timeout")]
     pub consent_ms: u64,
-    #[serde(default = "default_restore_retries")]
-    pub restore_retries: u8,
 }
 
 fn default_provider_timeout() -> u64 { 3_000 }
 fn default_hook_timeout() -> u64 { 6_000 }
 fn default_consent_timeout() -> u64 { 15_000 }
-fn default_restore_retries() -> u8 { 2 }
 
 impl Default for TimeoutConfig {
-    fn default() -> Self { Self { provider_ms: default_provider_timeout(), hook_ms: default_hook_timeout(), consent_ms: default_consent_timeout(), restore_retries: default_restore_retries() } }
+    fn default() -> Self { Self { provider_ms: default_provider_timeout(), hook_ms: default_hook_timeout(), consent_ms: default_consent_timeout() } }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -378,10 +375,6 @@ fn parse_dotenv_value(raw: &str, line_number: usize) -> Result<String, String> {
     let mut value = raw.to_string();
     if let Some(index) = value.find('#').filter(|index| *index > 0 && value[..*index].chars().last().is_some_and(char::is_whitespace)) { value.truncate(index); }
     Ok(value.trim().to_string())
-}
-
-pub fn default_catalog(config: &Config) -> ModelCatalog {
-    ModelCatalog { models: Vec::new(), gateway_targets: config.gateway.upstream_allowlist.clone() }
 }
 
 #[cfg(test)]

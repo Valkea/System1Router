@@ -3,7 +3,6 @@ use serde_json::Value;
 use std::fmt;
 
 pub const PROTOCOL_VERSION: &str = "1";
-pub const EXIT_OK: i32 = 0;
 pub const EXIT_MALFORMED_EVENT: i32 = 10;
 pub const EXIT_UNSUPPORTED_VERSION: i32 = 11;
 pub const EXIT_STARTUP_FAILURE: i32 = 12;
