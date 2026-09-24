@@ -1,4 +1,4 @@
-use crate::{classification::{classify_event, DecisionProvider, ProviderError}, config::{Config, ConsentMode}, policy::{resolve, target_available, PolicyResolution}, protocol::{correlation_id, ConsentOutcome, DecisionOutcome, Diagnostic, NormalizedDecision, NormalizedEvent, RoutingEvent, RoutingMode}, telemetry};
+use crate::{classification::{classify_event, DecisionProvider, ProviderError}, config::{Config, ConsentMode}, policy::{resolve, target_available, PolicyResolution}, protocol::{correlation_id, supported_protocol, ConsentOutcome, DecisionOutcome, Diagnostic, NormalizedDecision, NormalizedEvent, RoutingEvent, RoutingMode}, telemetry};
 use std::time::Instant;
 
 pub fn process_event(event: &NormalizedEvent, config: &Config, provider: &dyn DecisionProvider) -> NormalizedDecision {
@@ -9,7 +9,7 @@ pub fn process_event(event: &NormalizedEvent, config: &Config, provider: &dyn De
         protocol_version: crate::protocol::PROTOCOL_VERSION.into(), correlation_id: id.clone(), outcome, recommendation: None, consent: None, capability: capability.clone(), diagnostic, telemetry: Some(RoutingEvent { correlation_id: id.clone(), host: event.host.clone(), routing_class: classification.map(|value| value.routing_class.clone()), task_type: classification.map(|value| value.task_type.clone()), mode, policy_outcome: policy_outcome.into(), latency_ms: started.elapsed().as_millis() as u64, error_category: None, model: None, suggested_model: None, accepted: None, debug_capture: None }),
     };
 
-    if event.protocol_version != crate::protocol::PROTOCOL_VERSION {
+    if !supported_protocol(&event.protocol_version) {
         return base(DecisionOutcome::Bypass, Diagnostic::warning("unsupported_version", "unsupported normalized hook protocol"), None, RoutingMode::Advisory, "unsupported-version");
     }
     if recursion_guarded(event) {
@@ -74,10 +74,6 @@ fn choose_consent(event: &NormalizedEvent, config: &Config) -> ConsentOutcome {
 
 fn recursion_guarded(event: &NormalizedEvent) -> bool {
     event.event.starts_with("system1router.") || event.metadata.get("system1routerDepth").and_then(|value| value.as_u64()).is_some_and(|depth| depth > 0)
-}
-
-pub fn diagnostic_summary(event: &NormalizedEvent, config: &Config, provider: &dyn DecisionProvider) -> serde_json::Value {
-    serde_json::json!({ "host": event.host, "session": event.session_id, "capability": event.capabilities.level, "provider": provider.health(), "config": config.safe_summary(), "correlationId": correlation_id(event) })
 }
 
 pub fn record_decision(decision: &NormalizedDecision, event: &NormalizedEvent, config: &Config) {

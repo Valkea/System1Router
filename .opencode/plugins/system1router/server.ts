@@ -6,19 +6,16 @@ import type { Plugin } from "@opencode-ai/plugin";
 import { consentDirectory, consentTimeoutMs, recordUsage, routerEnabled, verboseEnabled, writeJsonAtomic, type ConsentRequest } from "./shared";
 
 type RouterResult = {
-  outcome?: string;
   consent?: string;
-  correlationId?: string;
   providerTrace?: string;
-  telemetry?: { routingClass?: string; taskType?: string };
-  diagnostic?: { code?: string; message?: string; details?: { providerError?: string } };
+  telemetry?: { routingClass?: string };
+  diagnostic?: { code?: string };
   recommendation?: {
     provider?: string;
     model?: string;
     variant?: string;
     reason?: string;
     routingClass?: string;
-    taskType?: string;
   };
 };
 
@@ -141,7 +138,6 @@ type RouterContext = {
   conversationSummary?: string;
   files: string[];
   tools: string[];
-  metadata: RecordValue;
   attachments: RecordValue[];
   toolCalls: RecordValue[];
 };
@@ -324,7 +320,6 @@ function projectConversationContext(
     ...(summary ? { conversationSummary: summary } : {}),
     files: recentUnique(files, 8).map((file) => clipText(file, 64)),
     tools: recentUnique(tools, 10).map((tool) => clipText(tool, 32)),
-    metadata: {},
     attachments: uniqueAttachments,
     toolCalls: recentCalls,
   };
@@ -352,19 +347,19 @@ function invoke(binary: string, payload: unknown, verbose: boolean, timeoutMs = 
       stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env, SYSTEM1ROUTER_VERBOSE: environmentVerbose === undefined ? (verbose ? "1" : "0") : environmentVerbose },
     });
-    const output: Buffer[] = [];
-    const errors: Buffer[] = [];
+    const output: Uint8Array[] = [];
+    const errors: Uint8Array[] = [];
     const timer = setTimeout(() => {
       child.kill();
-      resolve({ outcome: "bypass", diagnostic: { code: "timeout", message: "router invocation timed out" } });
+      resolve({ diagnostic: { code: "timeout" } });
     }, timeoutMs);
-    child.stdout.on("data", (chunk: Buffer) => output.push(chunk));
+    child.stdout.on("data", (chunk: Buffer) => output.push(new Uint8Array(chunk)));
     child.stderr.on("data", (chunk: Buffer) => {
-      errors.push(chunk);
+      errors.push(new Uint8Array(chunk));
     });
     child.on("error", () => {
       clearTimeout(timer);
-      resolve({ outcome: "bypass", diagnostic: { code: "startup_failure", message: "system1router executable is unavailable" } });
+      resolve({ diagnostic: { code: "startup_failure" } });
     });
     child.on("close", () => {
       clearTimeout(timer);
@@ -372,7 +367,7 @@ function invoke(binary: string, payload: unknown, verbose: boolean, timeoutMs = 
       try {
         resolve({ ...(JSON.parse(Buffer.concat(output).toString("utf8")) as RouterResult), ...(providerTrace ? { providerTrace } : {}) });
       } catch {
-        resolve({ outcome: "bypass", diagnostic: { code: "malformed_response", message: "router returned no valid decision" }, ...(providerTrace ? { providerTrace } : {}) });
+        resolve({ diagnostic: { code: "malformed_response" }, ...(providerTrace ? { providerTrace } : {}) });
       }
     });
     // The executable may exit before reading stdin (e.g. invalid config).
@@ -465,7 +460,6 @@ export const System1RouterServer: Plugin = async ({ client, directory }) => {
           conversationSummary: context.conversationSummary,
           files: context.files,
           tools: context.tools,
-          metadata: context.metadata,
         },
         catalog: { models: catalog },
         capabilities: {
@@ -575,7 +569,7 @@ export const System1RouterServer: Plugin = async ({ client, directory }) => {
       await notify(
         `${key}:accepted`,
         `Using ${suggested}${recommendation.variant ? ` (${recommendation.variant})` : ""} for this request.`,
-        "success",
+        "info",
       );
     },
   };
