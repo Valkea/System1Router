@@ -29,7 +29,7 @@ export type ConsentRequest = {
   createdAt: number;
   expiresAt: number;
   current?: { provider?: string; model?: string; variant?: string };
-  recommendation: { provider: string; model: string; variant?: string; reason?: string };
+  recommendation: { provider: string; model: string; variant?: string; routingClass?: string; reason?: string };
 };
 
 export function stateDirectory(): string {

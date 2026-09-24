@@ -530,6 +530,7 @@ export const System1RouterServer: Plugin = async ({ client, directory }) => {
               provider: recommendation.provider,
               model: recommendation.model,
               variant: recommendation.variant,
+              routingClass: recommendation.routingClass,
               reason: recommendation.reason,
             },
           );

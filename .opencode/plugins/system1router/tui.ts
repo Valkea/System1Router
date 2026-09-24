@@ -296,7 +296,7 @@ export const System1RouterTui: TuiPlugin = async (api) => {
     api.ui.dialog.replace(
       () => api.ui.DialogConfirm({
         title: `Use ${formatModel(request.recommendation)}?`,
-        message: `Current: ${formatModel(request.current)}\n${request.recommendation.reason ? `${request.recommendation.reason}\n` : ""}${remaining} to decide; timeout keeps the current model.`,
+        message: `Category: ${request.recommendation.routingClass ?? "unknown"}\nCurrent: ${formatModel(request.current)}\n\n${request.recommendation.reason ? `${request.recommendation.reason}\n` : ""}${remaining} to decide; timeout keeps the current model.`,
         onConfirm: () => void respond(request, Date.now() < request.expiresAt),
         onCancel: () => void respond(request, false),
       }),

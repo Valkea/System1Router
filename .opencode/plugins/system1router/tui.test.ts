@@ -66,11 +66,13 @@ test("loads router commands and handles confirmation, cancel and timeout", async
 
     const directory = consentDirectory();
     const request = { id: "sample", createdAt: Date.now(), expiresAt: Date.now() + 5000,
-      current: { provider: "p", model: "old", variant: "low" }, recommendation: { provider: "p", model: "new", variant: "high", reason: "Better for this task" } };
+      current: { provider: "p", model: "old", variant: "low" }, recommendation: { provider: "p", model: "new", variant: "high", routingClass: "code_hard", reason: "Better for this task" } };
     await fs.writeFile(path.join(directory, "sample.request.json"), JSON.stringify(request));
     for (let i = 0; i < 20 && dialog?.title !== "Use p/new (high)?"; i++) await Bun.sleep(50);
     expect(dialog?.title).toBe("Use p/new (high)?");
+    expect(dialog?.message).toContain("Category: code_hard");
     expect(dialog?.message).toContain("Current: p/old (low)");
+    expect(dialog?.message).toContain("Current: p/old (low)\n\nBetter for this task");
     expect(dialog?.message).toContain("timeout keeps the current model");
     expect(dialog?.options).toBeUndefined(); // DialogConfirm has no search field.
     dialog?.onConfirm?.(); // Confirm is highlighted by default in OpenCode.

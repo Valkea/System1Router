@@ -58,7 +58,10 @@ test("routes the same turn and counts actual acceptances, declines and missing U
             const names = await fs.readdir(consentDirectory());
             const name = names.find((item) => item.endsWith(".request.json"));
             if (name) {
-              const request = JSON.parse(await fs.readFile(path.join(consentDirectory(), name), "utf8")) as { id: string; expiresAt: number; createdAt: number };
+              const request = JSON.parse(await fs.readFile(path.join(consentDirectory(), name), "utf8")) as {
+                id: string; expiresAt: number; createdAt: number; recommendation: { routingClass?: string };
+              };
+              expect(request.recommendation.routingClass).toBe("code_simple");
               observedTimeouts.push(request.expiresAt - request.createdAt);
               await fs.writeFile(path.join(consentDirectory(), `${request.id}.response.json`), JSON.stringify({ id: request.id, accepted: choice }));
               return;
