@@ -111,6 +111,8 @@ Use `--host-config /path/to/host-config.json` for a test or non-default host con
 
 OpenCode offers three router commands: `/s1router_toogle` (also accepts `/s1router_toggle`) flips routing on/off; `/s1router_config` opens the menu to toggle routing and verbose traces or copy the config and provider-log paths; `/s1router_stats` shows calls by model and the share of answered suggestions accepted. The config file must exist to use the toggle. Routing status appears before the model starts thinking; the final status is shown with the prompt, excluded from model context. Verbose mode shows the redacted System One request and response in the chat, also excluded from model context. Provider exchanges are stored in `~/.local/state/system1router/provider-debug.jsonl` (or `$XDG_STATE_HOME/system1router/provider-debug.jsonl`). Usage stats are stored locally in `usage.jsonl` alongside the core's `events.jsonl`; disabling telemetry disables new stats. The native executable reads config and `.env` for every request; changes to plugin files need an OpenCode restart.
 
+The model confirmation has no search field and highlights **Confirm** (use the suggested model) by default. Use left/right arrows to choose **Cancel** (keep the current model), Enter to select, or Escape to keep the current model. It shows the time available when opened; set `timeouts.consentMs` in the active router config to extend that time (e.g. `120000` for two minutes). Expiry keeps the current model.
+
 Smoke-test the normalized protocol without intercepting a real client:
 
 ```sh

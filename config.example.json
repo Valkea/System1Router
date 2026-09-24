@@ -21,6 +21,7 @@
     "patterns": ["internal-secret-"]
   },
   "consent": { "mode": "interactive", "declineOnTimeout": true },
+  "timeouts": { "consentMs": 120000 },
   "gateway": {
     "enabled": false,
     "bind": "127.0.0.1:8765",

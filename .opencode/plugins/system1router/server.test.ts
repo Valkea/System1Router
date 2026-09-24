@@ -22,7 +22,7 @@ test("routes the same turn and counts actual acceptances, declines and missing U
       providerMetadata: { provider: "jev", version: "test" }, correlationId: "fixture",
     });
     await fs.writeFile(process.env.SYSTEM1ROUTER_CONFIG, JSON.stringify({
-      routing: { enabled: true }, providers: { selected: "jev", jev: { endpoint: "http://localhost", credentialEnv: null } },
+      routing: { enabled: true }, timeouts: { consentMs: 120000 }, providers: { selected: "jev", jev: { endpoint: "http://localhost", credentialEnv: null } },
       rules: [{ id: "simple", routingClass: "code_simple", target: { provider: "p", model: "suggested" }, reason: "Small change" }],
     }));
     await fs.mkdir(consentDirectory(), { recursive: true });
@@ -35,6 +35,7 @@ test("routes the same turn and counts actual acceptances, declines and missing U
         tui: { showToast: async ({ body }: { body: { message: string } }) => { toasts.push(body.message); } },
       },
     } as never);
+    const observedTimeouts: number[] = [];
 
     async function send(id: string, choice?: boolean) {
       const output = { message: { id, model: { providerID: "p", modelID: "current" } }, parts: [{ type: "text", text: "Make a small change" }] };
@@ -45,7 +46,8 @@ test("routes the same turn and counts actual acceptances, declines and missing U
             const names = await fs.readdir(consentDirectory());
             const name = names.find((item) => item.endsWith(".request.json"));
             if (name) {
-              const request = JSON.parse(await fs.readFile(path.join(consentDirectory(), name), "utf8")) as { id: string };
+              const request = JSON.parse(await fs.readFile(path.join(consentDirectory(), name), "utf8")) as { id: string; expiresAt: number; createdAt: number };
+              observedTimeouts.push(request.expiresAt - request.createdAt);
               await fs.writeFile(path.join(consentDirectory(), `${request.id}.response.json`), JSON.stringify({ id: request.id, accepted: choice }));
               return;
             }
@@ -72,6 +74,7 @@ test("routes the same turn and counts actual acceptances, declines and missing U
     expect(toasts).toContain("Routing this request…");
     expect(accepted.parts.some((part) => part.text.includes("Jev request:") && part.text.includes("Jev response:"))).toBe(true);
     const stats = await readStats();
+    expect(observedTimeouts).toEqual([120000, 120000]);
     expect(stats.calls).toBe(3);
     expect(stats.models).toEqual({ "p/suggested": 1, "p/current": 2 });
     expect([stats.suggestions, stats.accepted, stats.declined]).toEqual([2, 1, 1]);

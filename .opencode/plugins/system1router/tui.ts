@@ -3,10 +3,15 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import type { TuiPlugin } from "@opencode-ai/plugin/tui";
-import { CONSENT_TIMEOUT_MS, configFilePath, consentDirectory, providerLogPath, readStats, routerEnabled, verboseEnabled, writeJsonAtomic, type ConsentRequest } from "./shared";
+import { configFilePath, consentDirectory, providerLogPath, readStats, routerEnabled, verboseEnabled, writeJsonAtomic, type ConsentRequest } from "./shared";
 
 function verboseStatePath(): string {
   return path.join(consentDirectory(), "verbose.json");
+}
+
+function formatModel(model?: ConsentRequest["current"]): string {
+  if (!model?.model) return "the current selection";
+  return `${model.provider ? `${model.provider}/` : ""}${model.model}${model.variant ? ` (${model.variant})` : ""}`;
 }
 
 async function writeConfigAtomic(filename: string, value: unknown): Promise<void> {
@@ -24,11 +29,6 @@ async function writeConfigTextAtomic(filename: string, contents: string): Promis
     await fs.rm(temporary, { force: true }).catch(() => {});
     throw error;
   }
-}
-
-function formatModel(model?: { provider?: string; model?: string; variant?: string }): string {
-  if (!model?.model) return "the current selection";
-  return `${model.provider ? `${model.provider}/` : ""}${model.model}${model.variant ? ` (${model.variant})` : ""}`;
 }
 
 function alert(api: Parameters<TuiPlugin>[0], title: string, message: string): void {
@@ -85,6 +85,7 @@ export const System1RouterTui: TuiPlugin = async (api) => {
   let activeId: string | undefined;
   let scanning = false;
   let disposed = false;
+  let dialogRevision = 0;
 
   const heartbeatPath = path.join(directory, "heartbeat.json");
   const updateHeartbeat = async () => writeJsonAtomic(heartbeatPath, { instanceId, at: Date.now() }).catch(() => {});
@@ -286,6 +287,23 @@ export const System1RouterTui: TuiPlugin = async (api) => {
     void scan();
   };
 
+  function showModelChoices(request: ConsentRequest): void {
+    if (disposed || activeId !== request.id) return;
+    const seconds = Math.max(0, Math.ceil((request.expiresAt - Date.now()) / 1000));
+    if (seconds === 0) { void respond(request, false); return; }
+    const revision = ++dialogRevision;
+    const remaining = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+    api.ui.dialog.replace(
+      () => api.ui.DialogConfirm({
+        title: `Use ${formatModel(request.recommendation)}?`,
+        message: `Current: ${formatModel(request.current)}\n${request.recommendation.reason ? `${request.recommendation.reason}\n` : ""}${remaining} to decide; timeout keeps the current model.`,
+        onConfirm: () => void respond(request, Date.now() < request.expiresAt),
+        onCancel: () => void respond(request, false),
+      }),
+      () => { if (revision === dialogRevision) void respond(request, false); },
+    );
+  }
+
   async function scan(): Promise<void> {
     if (disposed || scanning || activeId) return;
     scanning = true;
@@ -301,7 +319,7 @@ export const System1RouterTui: TuiPlugin = async (api) => {
             await fs.rm(filename, { force: true });
             continue;
           }
-           if (request.expiresAt <= Date.now() || Date.now() - request.createdAt > CONSENT_TIMEOUT_MS) {
+          if (!Number.isFinite(request.expiresAt) || request.expiresAt <= Date.now()) {
             await fs.rm(filename, { force: true });
             continue;
           }
@@ -315,19 +333,7 @@ export const System1RouterTui: TuiPlugin = async (api) => {
       if (!request) return;
 
       activeId = request.id;
-      api.ui.dialog.replace(
-        () =>
-          api.ui.DialogSelect({
-            title: "System1Router · choose a model for this request",
-            options: [
-              { title: `Use ${formatModel(request.recommendation)}`, value: "accept", description: request.recommendation.reason ?? "Suggested model" },
-              { title: `Keep ${formatModel(request.current)}`, value: "decline", description: "Continue with the current model" },
-            ],
-            skipFilter: true,
-            onSelect: (option) => void respond(request, option.value === "accept"),
-          }),
-        () => void respond(request, false),
-      );
+      showModelChoices(request);
     } catch {
       // If the dialog could not open, do not leave the queue permanently blocked.
       activeId = undefined;

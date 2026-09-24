@@ -4,6 +4,25 @@ import { homedir } from "node:os";
 import path from "node:path";
 
 export const CONSENT_TIMEOUT_MS = 15_000;
+const MAX_CONSENT_TIMEOUT_MS = 86_400_000;
+
+/** Read the native router's consent timeout for each request (JSON or TOML). */
+export async function consentTimeoutMs(): Promise<number> {
+  try {
+    const filename = configFilePath();
+    const contents = await fs.readFile(filename, "utf8");
+    let timeout: unknown;
+    if (filename.endsWith(".toml")) {
+      const section = contents.match(/(?:^|\n)\s*\[timeouts\]([\s\S]*?)(?=\n\s*\[|$)/)?.[1] ?? "";
+      const value = section.match(/^\s*consentMs\s*=\s*([0-9][0-9_]*)\s*(?:#.*)?$/m)?.[1];
+      timeout = value === undefined ? undefined : Number(value.replaceAll("_", ""));
+    } else {
+      timeout = (JSON.parse(contents) as { timeouts?: { consentMs?: unknown } }).timeouts?.consentMs;
+    }
+    if (typeof timeout === "number" && Number.isSafeInteger(timeout) && timeout > 0 && timeout <= MAX_CONSENT_TIMEOUT_MS) return timeout;
+  } catch { /* Unconfigured or invalid config uses the native default. */ }
+  return CONSENT_TIMEOUT_MS;
+}
 
 export type ConsentRequest = {
   id: string;

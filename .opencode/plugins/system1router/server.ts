@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import type { Plugin } from "@opencode-ai/plugin";
-import { CONSENT_TIMEOUT_MS, consentDirectory, recordUsage, routerEnabled, verboseEnabled, writeJsonAtomic, type ConsentRequest } from "./shared";
+import { consentDirectory, consentTimeoutMs, recordUsage, routerEnabled, verboseEnabled, writeJsonAtomic, type ConsentRequest } from "./shared";
 
 type RouterResult = {
   outcome?: string;
@@ -89,8 +89,9 @@ async function requestConsent(
   const id = randomUUID();
   const requestPath = path.join(directory, `${id}.request.json`);
   const responsePath = path.join(directory, `${id}.response.json`);
-  const expiresAt = Date.now() + CONSENT_TIMEOUT_MS;
-  await writeJsonAtomic(requestPath, { id, createdAt: Date.now(), expiresAt, current, recommendation } satisfies ConsentRequest);
+  const createdAt = Date.now();
+  const expiresAt = createdAt + await consentTimeoutMs();
+  await writeJsonAtomic(requestPath, { id, createdAt, expiresAt, current, recommendation } satisfies ConsentRequest);
 
   try {
     while (Date.now() < expiresAt) {

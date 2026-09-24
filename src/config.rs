@@ -253,6 +253,7 @@ impl Config {
 
     pub fn validate(&self) -> Result<(), String> {
         if self.timeouts.provider_ms == 0 || self.timeouts.hook_ms == 0 { return Err("timeouts must be greater than zero".into()); }
+        if !(1..=86_400_000).contains(&self.timeouts.consent_ms) { return Err("timeouts.consentMs must be between 1 and 86400000 milliseconds".into()); }
         if self.redaction.max_query_chars == 0 || self.redaction.max_context_chars == 0 { return Err("redaction limits must be greater than zero".into()); }
         if !(0.0..=1.0).contains(&self.routing.min_confidence) { return Err("routing.minConfidence must be between 0 and 1".into()); }
         if let Some(template) = &self.providers.jev.state_template {
@@ -431,5 +432,16 @@ mod tests {
         config.providers.jev.state_template = Some("{query}".into());
         config.providers.jev.questions = Some(serde_json::json!({ "routing_class": {} }));
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_consent_timeouts_outside_the_ui_range() {
+        let mut config = Config::default();
+        config.timeouts.consent_ms = 0;
+        assert!(config.validate().is_err());
+        config.timeouts.consent_ms = 86_400_001;
+        assert!(config.validate().is_err());
+        config.timeouts.consent_ms = 120_000;
+        assert!(config.validate().is_ok());
     }
 }
