@@ -101,21 +101,29 @@ async function requestConsent(
   const requestPath = path.join(directory, `${id}.request.json`);
   const responsePath = path.join(directory, `${id}.response.json`);
   const createdAt = Date.now();
-  const expiresAt = createdAt + await consentTimeoutMs();
+  let expiresAt = createdAt + await consentTimeoutMs();
   await writeJsonAtomic(requestPath, { id, createdAt, expiresAt, current, recommendation } satisfies ConsentRequest);
 
   try {
-    while (Date.now() < expiresAt) {
+    while (true) {
+      try {
+        const request = JSON.parse(await fs.readFile(requestPath, "utf8")) as { id?: string; expiresAt?: number };
+        if (request.id === id && Number.isSafeInteger(request.expiresAt) && request.expiresAt! > expiresAt) {
+          expiresAt = request.expiresAt!;
+        }
+      } catch {
+        // The TUI may be replacing the request atomically while extending its deadline.
+      }
       try {
         const response = JSON.parse(await fs.readFile(responsePath, "utf8")) as { id?: string; accepted?: boolean };
         if (response.id === id && typeof response.accepted === "boolean") return response.accepted;
       } catch {
         // The TUI plugin writes an atomic response file after the user chooses.
       }
+      if (Date.now() >= expiresAt) return false;
       if (!(await tuiIsAlive(directory))) return undefined;
       await new Promise((resolve) => setTimeout(resolve, 120));
     }
-    return false;
   } finally {
     await Promise.all([fs.rm(requestPath, { force: true }), fs.rm(responsePath, { force: true })]);
   }

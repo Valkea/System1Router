@@ -22,7 +22,7 @@ test("routes the same turn and counts actual acceptances, declines and missing U
       providerMetadata: { provider: "jev", version: "test" }, correlationId: "fixture",
     });
     await fs.writeFile(process.env.SYSTEM1ROUTER_CONFIG, JSON.stringify({
-      routing: { enabled: true }, timeouts: { consentMs: 120000 }, providers: { selected: "jev", jev: { endpoint: "http://localhost", credentialEnv: null } },
+      routing: { enabled: true }, timeouts: { consentMs: 500 }, providers: { selected: "jev", jev: { endpoint: "http://localhost", credentialEnv: null } },
       rules: [{ id: "simple", routingClass: "code_simple", target: { provider: "p", model: "suggested", variant: "high" }, reason: "Small change" }],
     }));
     await fs.mkdir(consentDirectory(), { recursive: true });
@@ -58,11 +58,16 @@ test("routes the same turn and counts actual acceptances, declines and missing U
             const names = await fs.readdir(consentDirectory());
             const name = names.find((item) => item.endsWith(".request.json"));
             if (name) {
-              const request = JSON.parse(await fs.readFile(path.join(consentDirectory(), name), "utf8")) as {
+              const requestPath = path.join(consentDirectory(), name);
+              const request = JSON.parse(await fs.readFile(requestPath, "utf8")) as {
                 id: string; expiresAt: number; createdAt: number; recommendation: { routingClass?: string };
               };
               expect(request.recommendation.routingClass).toBe("code_simple");
               observedTimeouts.push(request.expiresAt - request.createdAt);
+              if (id === "first") {
+                await fs.writeFile(requestPath, JSON.stringify({ ...request, expiresAt: Date.now() + 1500 }));
+                await Bun.sleep(600);
+              }
               await fs.writeFile(path.join(consentDirectory(), `${request.id}.response.json`), JSON.stringify({ id: request.id, accepted: choice }));
               return;
             }
@@ -138,7 +143,7 @@ test("routes the same turn and counts actual acceptances, declines and missing U
     expect(missingUi.message.model.modelID).toBe("current");
     expect(toasts).toContain("Routing this request…");
     const stats = await readStats();
-    expect(observedTimeouts).toEqual([120000, 120000]);
+    expect(observedTimeouts).toEqual([500, 500]);
     expect(stats.calls).toBe(3);
     expect(stats.models).toEqual({ "p/suggested": 1, "p/current": 2 });
     expect([stats.suggestions, stats.accepted, stats.declined]).toEqual([2, 1, 1]);

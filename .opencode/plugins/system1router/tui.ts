@@ -86,6 +86,13 @@ export const System1RouterTui: TuiPlugin = async (api) => {
   let scanning = false;
   let disposed = false;
   let dialogRevision = 0;
+  let activeExpiresAt = 0;
+  let consentCountdownTimer: ReturnType<typeof setInterval> | undefined;
+
+  const stopConsentCountdown = () => {
+    if (consentCountdownTimer) clearInterval(consentCountdownTimer);
+    consentCountdownTimer = undefined;
+  };
 
   const heartbeatPath = path.join(directory, "heartbeat.json");
   const updateHeartbeat = async () => writeJsonAtomic(heartbeatPath, { instanceId, at: Date.now() }).catch(() => {});
@@ -169,10 +176,14 @@ export const System1RouterTui: TuiPlugin = async (api) => {
       try {
         const request = JSON.parse(await fs.readFile(path.join(directory, `${activeId}.request.json`), "utf8")) as ConsentRequest;
         activeId = undefined;
+        activeExpiresAt = 0;
+        stopConsentCountdown();
         await writeJsonAtomic(path.join(directory, `${request.id}.response.json`), { id: request.id, accepted: false, answeredAt: Date.now() });
         api.ui.dialog.clear();
       } catch {
         activeId = undefined;
+        activeExpiresAt = 0;
+        stopConsentCountdown();
         api.ui.dialog.clear();
       }
     }
@@ -278,6 +289,8 @@ export const System1RouterTui: TuiPlugin = async (api) => {
   const respond = async (request: ConsentRequest, accepted: boolean) => {
     if (activeId !== request.id) return;
     activeId = undefined;
+    activeExpiresAt = 0;
+    stopConsentCountdown();
     await writeJsonAtomic(path.join(directory, `${request.id}.response.json`), {
       id: request.id,
       accepted,
@@ -289,19 +302,53 @@ export const System1RouterTui: TuiPlugin = async (api) => {
 
   function showModelChoices(request: ConsentRequest): void {
     if (disposed || activeId !== request.id) return;
-    const seconds = Math.max(0, Math.ceil((request.expiresAt - Date.now()) / 1000));
-    if (seconds === 0) { void respond(request, false); return; }
-    const revision = ++dialogRevision;
-    const remaining = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
-    api.ui.dialog.replace(
-      () => api.ui.DialogConfirm({
-        title: `Use ${formatModel(request.recommendation)}?`,
-        message: `Category: ${request.recommendation.routingClass ?? "unknown"}\nCurrent: ${formatModel(request.current)}\n\n${request.recommendation.reason ? `${request.recommendation.reason}\n` : ""}${remaining} to decide; timeout keeps the current model.`,
-        onConfirm: () => void respond(request, Date.now() < request.expiresAt),
-        onCancel: () => void respond(request, false),
-      }),
-      () => { if (revision === dialogRevision) void respond(request, false); },
-    );
+    const requestPath = path.join(directory, `${request.id}.request.json`);
+    const timeoutMs = Math.max(1, request.expiresAt - request.createdAt);
+    let selected: "suggested" | "current" = "suggested";
+    let expiresAt = request.expiresAt;
+    activeExpiresAt = expiresAt;
+
+    const render = () => {
+      if (disposed || activeId !== request.id) return;
+      const seconds = Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
+      if (seconds === 0) { void respond(request, false); return; }
+      const remaining = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+      const revision = ++dialogRevision;
+      api.ui.dialog.replace(
+        () => api.ui.DialogSelect({
+          title: `Category: ${request.recommendation.routingClass ?? "unknown"} · ${remaining} left`,
+          current: selected,
+          skipFilter: true,
+          options: [
+            {
+              title: `Use suggested: ${formatModel(request.recommendation)}`,
+              value: "suggested",
+              description: request.recommendation.reason ?? "Use the suggested model for this request.",
+            },
+            {
+              title: `Keep current: ${formatModel(request.current)}`,
+              value: "current",
+              description: "Continue with the current model.",
+            },
+          ],
+          onMove: (option) => {
+            if (option.value !== "suggested" && option.value !== "current") return;
+            if (option.value === selected) return;
+            selected = option.value;
+            expiresAt = Date.now() + timeoutMs;
+            request.expiresAt = expiresAt;
+            activeExpiresAt = expiresAt;
+            void writeJsonAtomic(requestPath, request).then(render).catch(() => void respond(request, false));
+          },
+          onSelect: (option) => void respond(request, option.value === "suggested" && Date.now() < expiresAt),
+        }),
+        () => { if (revision === dialogRevision) void respond(request, false); },
+      );
+    };
+
+    stopConsentCountdown();
+    render();
+    if (activeId === request.id) consentCountdownTimer = setInterval(render, 1000);
   }
 
   async function scan(): Promise<void> {
@@ -350,10 +397,13 @@ export const System1RouterTui: TuiPlugin = async (api) => {
     const requestPath = path.join(directory, `${id}.request.json`);
     void fs.readFile(requestPath, "utf8").then((text) => {
       const request = JSON.parse(text) as ConsentRequest;
-      if (request.expiresAt <= Date.now()) void respond(request, false);
+      activeExpiresAt = Math.max(activeExpiresAt, request.expiresAt);
+      if (activeExpiresAt <= Date.now()) void respond(request, false);
     }).catch(() => {
       if (activeId !== id) return;
       activeId = undefined;
+      activeExpiresAt = 0;
+      stopConsentCountdown();
       api.ui.dialog.clear();
     });
   }, 1000);
