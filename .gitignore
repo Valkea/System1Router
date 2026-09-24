@@ -1,0 +1,57 @@
+# Rust build output
+/target/
+/dist/
+
+# Local credentials and environment overrides
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+.envrc
+/config.local.json
+/config.local.toml
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Generated dependencies, test output, and local diagnostics
+node_modules/
+/.agents/
+/.github/
+/coverage/
+/.nyc_output/
+/test-results/
+/playwright-report/
+/graphify-out/
+/events.jsonl
+/usage.jsonl
+/provider-debug.jsonl
+*.log
+*.pid
+
+# Workspace-only OpenCode tooling
+/.opencode/commands/
+/.opencode/skills/
+/.opencode/plugins/graphify.js
+
+# Editor and operating-system files
+.idea/
+.fleet/
+.history/
+.vscode/settings.json
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*~
+
+# Rust and Python temporary/cache files
+*.rs.bk
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
