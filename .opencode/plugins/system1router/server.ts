@@ -10,12 +10,15 @@ type RouterResult = {
   consent?: string;
   correlationId?: string;
   providerTrace?: string;
+  telemetry?: { routingClass?: string; taskType?: string };
   diagnostic?: { code?: string; message?: string; details?: { providerError?: string } };
   recommendation?: {
     provider?: string;
     model?: string;
     variant?: string;
     reason?: string;
+    routingClass?: string;
+    taskType?: string;
   };
 };
 
@@ -37,15 +40,13 @@ function appendVerboseTrace<Part extends object>(
   messageID: string,
   output: { parts: Part[] },
   result: RouterResult,
+  query: string,
+  startedAt: number,
 ): void {
-  const recommendation = result.recommendation;
-  const summary = recommendation?.provider && recommendation.model
-    ? `Suggested: ${recommendation.provider}/${recommendation.model}${recommendation.variant ? ` (${recommendation.variant})` : ""}${recommendation.reason ? `\nReason: ${recommendation.reason}` : ""}`
-    : `No model suggestion: ${result.diagnostic?.message ?? result.outcome ?? "no decision"}`;
   let text = [
-    `System1Router · ${result.outcome ?? "decision"}`,
-    summary,
-    result.providerTrace ?? "No Jev exchange was recorded for this request.",
+    "System1Router verbose input/output",
+    `Input:\n${query || "(no text input)"}`,
+    `Output:\n${result.providerTrace ?? "No Jev exchange was recorded for this request."}`,
   ].join("\n\n");
   const limit = 12_000;
   if (text.length > limit) text = `${text.slice(0, limit)}\n… trace shortened; open the provider log for the full exchange.`;
@@ -53,18 +54,24 @@ function appendVerboseTrace<Part extends object>(
     id: `prt_${randomUUID().replaceAll("-", "")}`,
     sessionID,
     messageID,
-    type: "text",
+    type: "reasoning",
     text,
-    synthetic: false,
+    time: { start: startedAt, end: Date.now() },
     ignored: true,
-    metadata: { system1router: "verbose-trace" },
+    metadata: { system1router: "verbose-details" },
   } as Part);
 }
 
-function appendRoutingStatus<Part extends object>(sessionID: string, messageID: string, output: { parts: Part[] }, text: string): void {
-  output.parts.push({
-    id: `prt_${randomUUID().replaceAll("-", "")}`,
-    sessionID, messageID, type: "text", text: `System1Router · ${text}`,
+function routingStatusText(routingClass: string | undefined, model: string, variant?: string): string {
+  const source = routingClass ? `S1R / ${routingClass}` : "S1R";
+  return `╭─ → ${source}\n│  ◇ ${model}${variant ? ` · ${variant}` : ""}\n╰─\n`;
+}
+
+function prependRoutingStatus<Part extends object>(sessionID: string, messageID: string, output: { parts: Part[] }, text: string): void {
+  // OpenCode reloads message parts sorted by ID, so give this block a low-sort ID to keep it before the prompt.
+  output.parts.unshift({
+    id: `prt_${"0".repeat(26)}${randomUUID().replaceAll("-", "")}`,
+    sessionID, messageID, type: "text", text,
     synthetic: false, ignored: true,
     metadata: { system1router: "routing-status" },
   } as Part);
@@ -189,6 +196,8 @@ export const System1RouterServer: Plugin = async ({ client, directory }) => {
       };
       const model = input.model ?? userMessage.model;
       const current = model?.providerID && model.modelID ? `${model.providerID}/${model.modelID}` : undefined;
+      const currentVariant = userMessage.model.variant ?? input.variant;
+      const currentModelName = model?.modelID ?? "OpenCode default";
       const enabled = await routerEnabled();
       if (!enabled) {
         await notify("disabled", "Routing is off. Configure the provider and rules, then enable it with /s1router_config.");
@@ -219,6 +228,8 @@ export const System1RouterServer: Plugin = async ({ client, directory }) => {
       }
 
       const verbose = await verboseEnabled();
+      const query = textFromParts(output.parts);
+      const routingStartedAt = Date.now();
       const result = await invoke(binary, {
         protocolVersion: "1",
         host: "opencode",
@@ -226,7 +237,7 @@ export const System1RouterServer: Plugin = async ({ client, directory }) => {
         sessionId: input.sessionID,
         turnId: messageID,
         cwd: directory,
-        request: { query: textFromParts(output.parts) },
+        request: { query },
         currentModel: model
           ? { provider: model.providerID, model: model.modelID, variant: userMessage.model.variant ?? input.variant, scope: input.sessionID }
           : undefined,
@@ -240,7 +251,10 @@ export const System1RouterServer: Plugin = async ({ client, directory }) => {
         },
         metadata: { plugin: "opencode", sdk: "@opencode-ai/plugin@1.4.3" },
       }, verbose);
-      if (verbose) appendVerboseTrace(input.sessionID, output.message.id, output, result);
+
+      const appendVerboseDetails = () => {
+        if (verbose) appendVerboseTrace(input.sessionID, output.message.id, output, result, query, routingStartedAt);
+      };
 
       if (result.diagnostic?.code === "disabled") {
         await notify(
@@ -260,19 +274,23 @@ export const System1RouterServer: Plugin = async ({ client, directory }) => {
       }
 
       const recommendation = result.recommendation;
+      const routingClass = recommendation?.routingClass ?? result.telemetry?.routingClass;
       if (!recommendation?.provider || !recommendation.model) {
-        appendRoutingStatus(input.sessionID, output.message.id, output, `keeping ${current ?? "current model"} (${result.diagnostic?.message ?? "no matching route"})`);
+        appendVerboseDetails();
+        prependRoutingStatus(input.sessionID, output.message.id, output, routingStatusText(routingClass, currentModelName, currentVariant));
         await recordUsage({ host: "opencode", model: current, policyOutcome: result.diagnostic?.code }).catch(() => {});
         return;
       }
       const suggested = `${recommendation.provider}/${recommendation.model}`;
-      if (current === suggested && (userMessage.model.variant ?? input.variant) === recommendation.variant) {
-        appendRoutingStatus(input.sessionID, output.message.id, output, `already using ${suggested}`);
+      if (current === suggested && currentVariant === recommendation.variant) {
+        appendVerboseDetails();
+        prependRoutingStatus(input.sessionID, output.message.id, output, routingStatusText(routingClass, recommendation.model, recommendation.variant));
         await recordUsage({ host: "opencode", model: current, policyOutcome: "same-model" }).catch(() => {});
         return;
       }
       if (result.consent === "keep_current_model") {
-        appendRoutingStatus(input.sessionID, output.message.id, output, `keeping ${current ?? "current model"}`);
+        appendVerboseDetails();
+        prependRoutingStatus(input.sessionID, output.message.id, output, routingStatusText(routingClass, currentModelName, currentVariant));
         await recordUsage({ host: "opencode", model: current, suggestedModel: suggested, accepted: false }).catch(() => {});
         return;
       }
@@ -301,13 +319,20 @@ export const System1RouterServer: Plugin = async ({ client, directory }) => {
           "No active OpenCode confirmation dialog is available. Keeping the current model; start the project TUI and retry.",
           "warning",
         );
-        appendRoutingStatus(input.sessionID, output.message.id, output, `keeping ${current ?? "current model"} (confirmation unavailable)`);
+        appendVerboseDetails();
+        prependRoutingStatus(input.sessionID, output.message.id, output, routingStatusText(routingClass, currentModelName, currentVariant));
         await recordUsage({ host: "opencode", model: current, suggestedModel: suggested, policyOutcome: "consent-unavailable" }).catch(() => {});
         return;
       }
-      if (!accepted || !(await routerEnabled())) {
-        appendRoutingStatus(input.sessionID, output.message.id, output, `keeping ${current ?? "current model"}`);
-        await recordUsage({ host: "opencode", model: current, suggestedModel: suggested, accepted: !accepted ? false : undefined }).catch(() => {});
+      if (!accepted) {
+        appendVerboseDetails();
+        await recordUsage({ host: "opencode", model: current, suggestedModel: suggested, accepted: false }).catch(() => {});
+        return;
+      }
+      if (!(await routerEnabled())) {
+        appendVerboseDetails();
+        prependRoutingStatus(input.sessionID, output.message.id, output, routingStatusText(routingClass, currentModelName, currentVariant));
+        await recordUsage({ host: "opencode", model: current, suggestedModel: suggested }).catch(() => {});
         return;
       }
 
@@ -318,11 +343,12 @@ export const System1RouterServer: Plugin = async ({ client, directory }) => {
         modelID: recommendation.model,
         ...(recommendation.variant ? { variant: recommendation.variant } : {}),
       };
-      appendRoutingStatus(input.sessionID, output.message.id, output, `using ${suggested}${recommendation.variant ? ` (${recommendation.variant})` : ""} for this request`);
+      appendVerboseDetails();
+      prependRoutingStatus(input.sessionID, output.message.id, output, routingStatusText(routingClass, recommendation.model, recommendation.variant));
       await recordUsage({ host: "opencode", model: suggested, suggestedModel: suggested, accepted: true }).catch(() => {});
       await notify(
         `${key}:accepted`,
-        `Using ${recommendation.provider}/${recommendation.model}${recommendation.variant ? ` (${recommendation.variant})` : ""} for this request.`,
+        `Using ${suggested}${recommendation.variant ? ` (${recommendation.variant})` : ""} for this request.`,
         "success",
       );
     },

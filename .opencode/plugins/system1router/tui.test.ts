@@ -66,11 +66,11 @@ test("loads router commands and handles confirmation, cancel and timeout", async
 
     const directory = consentDirectory();
     const request = { id: "sample", createdAt: Date.now(), expiresAt: Date.now() + 5000,
-      current: { provider: "p", model: "old" }, recommendation: { provider: "p", model: "new", reason: "Better for this task" } };
+      current: { provider: "p", model: "old", variant: "low" }, recommendation: { provider: "p", model: "new", variant: "high", reason: "Better for this task" } };
     await fs.writeFile(path.join(directory, "sample.request.json"), JSON.stringify(request));
-    for (let i = 0; i < 20 && dialog?.title !== "Use p/new?"; i++) await Bun.sleep(50);
-    expect(dialog?.title).toBe("Use p/new?");
-    expect(dialog?.message).toContain("Current: p/old");
+    for (let i = 0; i < 20 && dialog?.title !== "Use p/new (high)?"; i++) await Bun.sleep(50);
+    expect(dialog?.title).toBe("Use p/new (high)?");
+    expect(dialog?.message).toContain("Current: p/old (low)");
     expect(dialog?.message).toContain("timeout keeps the current model");
     expect(dialog?.options).toBeUndefined(); // DialogConfirm has no search field.
     dialog?.onConfirm?.(); // Confirm is highlighted by default in OpenCode.
@@ -79,7 +79,7 @@ test("loads router commands and handles confirmation, cancel and timeout", async
 
     const cancelled = { ...request, id: "cancelled", createdAt: Date.now(), expiresAt: Date.now() + 3000 };
     await fs.writeFile(path.join(directory, "cancelled.request.json"), JSON.stringify(cancelled));
-    for (let i = 0; i < 20 && dialog?.title !== "Use p/new?"; i++) await Bun.sleep(50);
+    for (let i = 0; i < 20 && dialog?.title !== "Use p/new (high)?"; i++) await Bun.sleep(50);
     api.ui.dialog.clear();
     for (let i = 0; i < 20; i++) {
       if (await fs.access(path.join(directory, "cancelled.response.json")).then(() => true).catch(() => false)) break;
