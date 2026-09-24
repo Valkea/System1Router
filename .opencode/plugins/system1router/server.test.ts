@@ -27,10 +27,22 @@ test("routes the same turn and counts actual acceptances, declines and missing U
     }));
     await fs.mkdir(consentDirectory(), { recursive: true });
 
+    const history = [
+      { info: { id: "prior-user", role: "user" }, parts: [
+        { type: "text", text: "We are implementing the parser." },
+        { type: "file", filename: path.join(root, "src", "parser.rs"), mime: "text/plain", url: "file:///parser.rs" },
+      ] },
+      { info: { id: "prior-assistant", role: "assistant" }, parts: [
+        { type: "text", text: "The parser uses recursive descent." },
+        { type: "tool", tool: "read", state: { status: "completed", input: { filePath: path.join(root, "src", "parser.rs") }, output: "parse_expression reads the left-hand token." } },
+      ] },
+      { info: { id: "first", role: "user" }, parts: [{ type: "text", text: "Make a small change" }] },
+    ];
     const toasts: string[] = [];
     const plugin = await System1RouterServer({
       directory: root,
       client: {
+        session: { messages: async () => ({ data: history }) },
         provider: { list: async () => ({ data: { connected: ["p"], all: [{ id: "p", models: { current: { id: "current" }, suggested: { id: "suggested" } } }] } }) },
         tui: { showToast: async ({ body }: { body: { message: string } }) => { toasts.push(body.message); } },
       },
@@ -84,7 +96,30 @@ test("routes the same turn and counts actual acceptances, declines and missing U
     expect([...acceptedParts].sort((a, b) => a.id.localeCompare(b.id))[0]).toBe(acceptedStatus);
     expect(acceptedParts.some((part) => part.metadata?.system1router === "verbose-decision")).toBe(false);
     expect(acceptedDetails?.type).toBe("reasoning");
-    expect(acceptedDetails?.text).toContain("Input:\nMake a small change");
+    expect(acceptedDetails?.text).toContain("Current message:\nMake a small change");
+    expect(acceptedDetails?.text).toContain("We are implementing the parser.");
+    expect(acceptedDetails?.text).toContain("The parser uses recursive descent.");
+    expect(acceptedDetails?.text).toContain("Tool read (completed)");
+    expect(acceptedDetails?.text).toContain('Input: {"filePath":"src/parser.rs"}');
+    expect(acceptedDetails?.text).toContain("parse_expression reads the left-hand token.");
+    expect(acceptedDetails?.text).toContain("src/parser.rs");
+    expect(acceptedDetails?.text).not.toContain(root);
+    const jevRequest = acceptedDetails?.text?.match(/Jev request:\n([\s\S]*?)\n\nJev response:/)?.[1];
+    expect(jevRequest).toBeDefined();
+    const providerInput = JSON.parse(jevRequest ?? "{}") as { state?: string };
+    const contextStart = providerInput.state?.indexOf("\n\nBounded context: ") ?? -1;
+    expect(contextStart).toBeGreaterThanOrEqual(0);
+    expect(providerInput.state?.slice(0, contextStart)).toBe("Make a small change");
+    const routedContext = JSON.parse(providerInput.state!.slice(contextStart + "\n\nBounded context: ".length)) as {
+      conversationSummary?: string;
+      files?: string[];
+      tools?: string[];
+    };
+    expect(routedContext.conversationSummary).toContain("We are implementing the parser.");
+    expect(routedContext.conversationSummary).not.toContain("Make a small change");
+    expect(routedContext.conversationSummary).toContain('Input: {"filePath":"src/parser.rs"}');
+    expect(routedContext.files).toContain("src/parser.rs");
+    expect(routedContext.tools).toContain("read");
     expect(acceptedDetails?.text).toContain("Output:\n");
     expect(acceptedDetails?.text).toContain("Jev request:");
     expect(acceptedDetails?.text).toContain("Jev response:");

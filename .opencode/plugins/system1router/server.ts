@@ -41,11 +41,18 @@ function appendVerboseTrace<Part extends object>(
   output: { parts: Part[] },
   result: RouterResult,
   query: string,
+  context: RouterContext,
   startedAt: number,
 ): void {
+  const input = [
+    `Current message:\n${query || "(no text input)"}`,
+    context.conversationSummary ? `Recent conversation:\n${context.conversationSummary}` : undefined,
+    context.tools.length ? `Tools used: ${context.tools.join(", ")}` : undefined,
+    context.files.length ? `Files accessed: ${context.files.join(", ")}` : undefined,
+  ].filter(Boolean).join("\n\n");
   let text = [
     "System1Router verbose input/output",
-    `Input:\n${query || "(no text input)"}`,
+    `Input:\n${input}`,
     `Output:\n${result.providerTrace ?? "No Jev exchange was recorded for this request."}`,
   ].join("\n\n");
   const limit = 12_000;
@@ -126,6 +133,216 @@ function textFromParts(parts: unknown[]): string {
     })
     .filter(Boolean)
     .join("\n");
+}
+
+type RecordValue = Record<string, unknown>;
+type SessionMessage = { info?: RecordValue; parts?: unknown[] };
+type RouterContext = {
+  conversationSummary?: string;
+  files: string[];
+  tools: string[];
+  metadata: RecordValue;
+  attachments: RecordValue[];
+  toolCalls: RecordValue[];
+};
+
+function asRecord(value: unknown): RecordValue | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as RecordValue : undefined;
+}
+
+function clipText(value: string, limit: number): string {
+  const characters = Array.from(value);
+  return characters.length > limit ? `${characters.slice(0, limit).join("")}…[truncated]` : value;
+}
+
+function keepRecentText(value: string, limit: number): string {
+  const characters = Array.from(value);
+  if (characters.length <= limit) return value;
+  return `[Earlier conversation omitted]\n${characters.slice(-(limit - 30)).join("")}`;
+}
+
+function displayFilePath(value: string, directory: string): string {
+  let normalized = value.trim().replaceAll("\\", "/");
+  if (!normalized) return "";
+  if (normalized.startsWith("file://")) {
+    try { normalized = decodeURIComponent(new URL(normalized).pathname); } catch { /* Keep the original path */ }
+  }
+  const root = directory.replaceAll("\\", "/").replace(/\/+$/, "");
+  if (root && normalized.startsWith(`${root}/`)) return normalized.slice(root.length + 1);
+  if (normalized === root) return ".";
+  if (normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized)) return normalized.split("/").pop() ?? "";
+  return normalized.replace(/^\.\//, "");
+}
+
+function recentUnique(values: string[], limit: number): string[] {
+  const output: string[] = [];
+  for (let index = values.length - 1; index >= 0 && output.length < limit; index--) {
+    const value = values[index];
+    if (value && !output.includes(value)) output.push(value);
+  }
+  return output.reverse();
+}
+
+function safeToolInput(value: unknown, directory: string, key = ""): unknown {
+  if (/token|secret|password|authorization|credential|api.?key/i.test(key)) return "[REDACTED]";
+  if (typeof value === "string") {
+    if (/^(filePath|filename|path|file|workdir)$/i.test(key)) return displayFilePath(value, directory);
+    return clipText(value.replaceAll(directory, "."), 240);
+  }
+  if (Array.isArray(value)) return value.slice(0, 8).map((item) => safeToolInput(item, directory, key));
+  const object = asRecord(value);
+  if (object) {
+    return Object.fromEntries(Object.entries(object).slice(0, 16).map(([name, item]) => [name, safeToolInput(item, directory, name)]));
+  }
+  return value;
+}
+
+function collectFilePaths(value: unknown, directory: string, output: string[], key = ""): void {
+  if (typeof value === "string") {
+    if (/^(filePath|filename|path|file|files|loaded|workdir)$/i.test(key)) {
+      const filename = displayFilePath(value, directory);
+      if (filename) output.push(filename);
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectFilePaths(item, directory, output, key);
+    return;
+  }
+  const object = asRecord(value);
+  if (object) for (const [name, item] of Object.entries(object)) collectFilePaths(item, directory, output, name);
+}
+
+function addFilePart(part: RecordValue, directory: string, files: string[], attachments: RecordValue[]): string | undefined {
+  const source = asRecord(part.source);
+  const filename = typeof part.filename === "string" ? part.filename : typeof source?.path === "string" ? source.path : undefined;
+  if (!filename) return undefined;
+  const name = displayFilePath(filename, directory);
+  if (!name) return undefined;
+  files.push(name);
+  const mime = typeof part.mime === "string" ? part.mime : undefined;
+  attachments.push({ filename: name, ...(mime ? { mime } : {}) });
+  const sourceText = asRecord(source?.text)?.value;
+  return `[File: ${name}${mime ? ` (${mime})` : ""}]${typeof sourceText === "string" ? `\n${clipText(sourceText, 400)}` : ""}`;
+}
+
+function projectConversationContext(
+  history: SessionMessage[],
+  currentMessageID: string,
+  currentParts: unknown[],
+  directory: string,
+): RouterContext {
+  const blocks: string[] = [];
+  const files: string[] = [];
+  const tools: string[] = [];
+  const attachments: RecordValue[] = [];
+  const toolCalls: RecordValue[] = [];
+  const currentFiles: string[] = [];
+
+  for (const rawPart of currentParts) {
+    const part = asRecord(rawPart);
+    if (part?.type === "file") {
+      const label = addFilePart(part, directory, files, attachments);
+      if (label) currentFiles.push(label);
+    }
+  }
+
+  for (const message of history.slice(-100)) {
+    const info = asRecord(message.info);
+    const messageID = typeof info?.id === "string" ? info.id : undefined;
+    if (messageID === currentMessageID) continue;
+    const role = info?.role === "user" ? "User" : info?.role === "assistant" ? "Assistant" : undefined;
+    if (!role) continue;
+
+    const messageParts: string[] = [];
+    for (const rawPart of message.parts ?? []) {
+      const part = asRecord(rawPart);
+      if (!part) continue;
+      const metadata = asRecord(part.metadata);
+      if (metadata?.system1router) continue;
+
+      if (part.type === "text" && !(role === "User" && part.ignored === true) && typeof part.text === "string" && part.text) {
+        messageParts.push(clipText(part.text.replaceAll(directory, "."), 900));
+        continue;
+      }
+      if (part.type === "file") {
+        const label = addFilePart(part, directory, files, attachments);
+        if (label) messageParts.push(label);
+        continue;
+      }
+      if (part.type === "reasoning" && typeof part.text === "string" && part.text) {
+        messageParts.push(`Reasoning:\n${clipText(part.text.replaceAll(directory, "."), 500)}`);
+        continue;
+      }
+      if (part.type === "tool") {
+        const tool = typeof part.tool === "string" ? part.tool : "tool";
+        const state = asRecord(part.state) ?? {};
+        const status = typeof state.status === "string" ? state.status : "unknown";
+        const input = asRecord(state.input) ?? {};
+        const stateMetadata = asRecord(state.metadata) ?? {};
+        const stateTime = asRecord(state.time) ?? {};
+        tools.push(tool);
+        collectFilePaths(input, directory, files);
+        collectFilePaths(stateMetadata.loaded, directory, files, "loaded");
+        for (const attachment of Array.isArray(state.attachments) ? state.attachments : []) {
+          const label = addFilePart(asRecord(attachment) ?? {}, directory, files, attachments);
+          if (label) messageParts.push(label);
+        }
+
+        const inputSummary = clipText(JSON.stringify(safeToolInput(input, directory)), 180);
+        toolCalls.push({ tool, status, input: inputSummary });
+
+        let output = "";
+        if (status === "completed") {
+          output = typeof stateTime.compacted === "number" ? "[Old tool result content cleared]" : typeof state.output === "string" ? state.output : "";
+        } else if (status === "error") {
+          output = typeof state.error === "string" ? state.error : "[Tool failed]";
+        } else {
+          output = `[Tool ${status}]`;
+        }
+        const detail = clipText(output.replaceAll(directory, "."), 700);
+        messageParts.push(`Tool ${tool} (${status})\nInput: ${inputSummary}${detail ? `\nOutput:\n${detail}` : ""}`);
+        continue;
+      }
+      if (part.type === "subtask") {
+        const agent = typeof part.agent === "string" ? part.agent : "agent";
+        tools.push(agent);
+        const description = typeof part.description === "string" ? part.description : "delegated task";
+        const prompt = typeof part.prompt === "string" ? clipText(part.prompt, 300) : "";
+        messageParts.push(`Delegated to ${agent}: ${description}${prompt ? `\n${prompt}` : ""}`);
+      }
+    }
+    if (messageParts.length) blocks.push(`${role}:\n${messageParts.join("\n")}`);
+  }
+
+  if (currentFiles.length) blocks.push(`Current attachments:\n${currentFiles.join("\n")}`);
+  const summary = keepRecentText(blocks.join("\n\n"), 3_000);
+  const recentCalls = toolCalls.slice(-5);
+  const uniqueAttachments = Array.from(new Map(attachments.map((item) => [`${item.filename}:${item.mime ?? ""}`, item])).values()).slice(-16);
+
+  return {
+    ...(summary ? { conversationSummary: summary } : {}),
+    files: recentUnique(files, 8).map((file) => clipText(file, 64)),
+    tools: recentUnique(tools, 10).map((tool) => clipText(tool, 32)),
+    metadata: {},
+    attachments: uniqueAttachments,
+    toolCalls: recentCalls,
+  };
+}
+
+async function sessionHistory(client: Parameters<Plugin>[0]["client"], sessionID: string, directory: string): Promise<SessionMessage[]> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const response = await Promise.race([
+      client.session.messages({ path: { id: sessionID }, query: { directory, limit: 100 } }),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("session history timeout")), 1_000); }),
+    ]);
+    return Array.isArray(response.data) ? response.data as SessionMessage[] : [];
+  } catch {
+    return [];
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function invoke(binary: string, payload: unknown, verbose: boolean, timeoutMs = 10_000): Promise<RouterResult> {
@@ -210,6 +427,7 @@ export const System1RouterServer: Plugin = async ({ client, directory }) => {
         title: "System1Router", message: "Routing this request…", variant: "info", duration: 3000,
       } }).catch(() => {});
 
+      const historyPromise = sessionHistory(client, input.sessionID, directory);
       let catalog: unknown[] = [];
       try {
         const providers = await Promise.race([
@@ -229,6 +447,8 @@ export const System1RouterServer: Plugin = async ({ client, directory }) => {
 
       const verbose = await verboseEnabled();
       const query = textFromParts(output.parts);
+      const history = await historyPromise;
+      const context = projectConversationContext(history, messageID, output.parts, directory);
       const routingStartedAt = Date.now();
       const result = await invoke(binary, {
         protocolVersion: "1",
@@ -237,10 +457,16 @@ export const System1RouterServer: Plugin = async ({ client, directory }) => {
         sessionId: input.sessionID,
         turnId: messageID,
         cwd: directory,
-        request: { query },
+        request: { query, attachments: context.attachments, tools: context.toolCalls },
         currentModel: model
           ? { provider: model.providerID, model: model.modelID, variant: userMessage.model.variant ?? input.variant, scope: input.sessionID }
           : undefined,
+        context: {
+          conversationSummary: context.conversationSummary,
+          files: context.files,
+          tools: context.tools,
+          metadata: context.metadata,
+        },
         catalog: { models: catalog },
         capabilities: {
           level: "full-override",
@@ -253,7 +479,7 @@ export const System1RouterServer: Plugin = async ({ client, directory }) => {
       }, verbose);
 
       const appendVerboseDetails = () => {
-        if (verbose) appendVerboseTrace(input.sessionID, output.message.id, output, result, query, routingStartedAt);
+        if (verbose) appendVerboseTrace(input.sessionID, output.message.id, output, result, query, context, routingStartedAt);
       };
 
       if (result.diagnostic?.code === "disabled") {
