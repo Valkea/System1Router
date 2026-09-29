@@ -1,6 +1,6 @@
 use crate::protocol::{CapabilityHints, CapabilityLevel, DecisionOutcome, NormalizedDecision, NormalizedEvent, RequestPayload, BoundedContext, ModelCatalog, ModelRef, ModelState, PROTOCOL_VERSION};
 use serde_json::{json, Value};
-pub use crate::host_install::{default_config_path, doctor, install, uninstall, INSTALL_VERSION};
+pub use crate::host_install::{default_config_path, doctor, install, install_opencode, refresh_opencode_installations, uninstall, uninstall_opencode, OpenCodeScope, INSTALL_VERSION};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Host { OpenCode, ClaudeCode, Codex, CopilotCli, CopilotVsCode, Generic }

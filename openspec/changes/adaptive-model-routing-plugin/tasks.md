@@ -13,7 +13,7 @@
 - [x] 2.2 Route logs and diagnostics exclusively to stderr and enforce bounded execution timeouts.
 - [x] 2.3 Implement malformed-event, unsupported-version, startup-failure, timeout, and internal-error fail-open behavior.
 - [x] 2.4 Implement host protocol translators for Claude Code, Codex, GitHub Copilot CLI/VS Code, and OpenCode’s plugin shim.
-- [x] 2.5 Implement `init`, `uninstall`, and `doctor` commands with ownership markers, idempotent edits, version/hash tracking, and preservation of unrelated configuration.
+- [x] 2.5 Implement interactive project/global OpenCode `install`, host `init`/`uninstall`, and `doctor` commands with ownership markers and preservation of unrelated configuration.
 - [x] 2.6 Add native binary packaging and installation instructions for supported OS/CPU targets.
 - [x] 2.7 Benchmark one-shot startup and add an optional local daemon/socket mode only if measured hook latency justifies it.
 - [x] 2.8 Add protocol fixtures and tests for every host input/output mapping and unsupported response field.
@@ -61,7 +61,7 @@
 - [x] 7.3 Implement the OpenCode consent UI/notification path with an explicit suggested-model/current-model choice when a supported interactive TUI channel is available, and redacted routing diagnostics using supported public APIs.
 - [x] 7.4 Implement the verified full-override path if the capability probe confirms one; otherwise expose observe-only or consent-only behavior without duplicate requests.
 - [x] 7.5 Add OpenCode integration tests for normal requests, recursion guards, model availability, accept/decline, request-scoped model/variant changes, gateway configuration, unsupported capability, and plugin-disabled behavior.
-- [x] 7.6 Add the OpenCode plugin/configuration entry and document installation, enablement, provider setup, gateway setup, and rollback.
+- [x] 7.6 Add project/global OpenCode plugin installation, configuration entries, and rollback documentation.
 
 ## 8. Claude Code And Codex Integrations
 
@@ -87,3 +87,4 @@
 - [x] 10.3 Add end-to-end contract tests that run the same routing scenarios against every adapter capability level and gateway mode.
 - [x] 10.4 Add documentation for policy precedence, fail-open/fail-closed behavior, privacy implications, provider/gateway data handling, and model-state recovery.
 - [x] 10.5 Run the full test suite, type checks, native builds, packaging checks, installer tests, and host-specific smoke tests before enabling routing by default.
+- [x] 10.6 Add a version check/update command backed by published crates.io releases and refresh managed plugin copies after updates.

@@ -7,7 +7,8 @@ A lightweight System 1 decision provider such as Jev or Laya supplies the routin
 ## What Changes
 
 - Add a native, cross-platform `system1router` executable with a documented JSON stdin/stdout hook protocol, similar to RTK’s host installation model.
-- Add an idempotent `init` command that installs and removes thin host-specific hook adapters without overwriting unrelated user configuration.
+- Add idempotent `install`, `init`, and `uninstall` commands that install host adapters without overwriting unrelated user configuration; OpenCode supports project-local and user-global plugin scopes.
+- Add an `update` command that checks published versions and updates the executable and managed plugin copies.
 - Add a shared, context-aware routing core that selects the best available model for each eligible user query from the query, bounded session/project context, client capabilities, model catalog, and user policy.
 - Add the canonical six-class routing taxonomy: `question_simple`, `question_moderate`, `question_hard`, `code_simple`, `code_moderate`, and `code_hard`, with task intent and contextual signals kept as separate routing inputs.
 - Support pluggable decision-model providers, initially including hosted Jev and locally hosted Laya-compatible adapters.

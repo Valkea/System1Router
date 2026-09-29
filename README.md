@@ -91,13 +91,23 @@ The worker receives the same bounded decision request as Jev and returns the nor
 
 ## Install Host Hooks
 
+Install the OpenCode server and TUI plugins interactively:
+
+```sh
+system1router install
+```
+
+Choose **This project only** to install under `.opencode/`, or **All projects for this user** to install under `~/.config/opencode/` (or `$XDG_CONFIG_HOME/opencode/`). For scripts, pass `--scope project` or `--scope global`. `system1router uninstall --host opencode --scope <scope>` removes only files created by this installer. If a project already includes the System1Router plugin, it is already installed locally; the global option warns about loading both copies in that project.
+
+Use `system1router update` to check crates.io for a newer published version and install it. `system1router update --check` only checks. The package must be published to crates.io for remote updates to be available; when run from the source checkout, `update` installs that checkout.
+
 Inspect the detected host contracts and current provider/configuration state first:
 
 ```sh
 system1router doctor
 ```
 
-Install one ownership-marked hook per host. Repeating `init` is idempotent and `uninstall` removes only System1Router-owned entries:
+Install one ownership-marked hook per command-hook host. Repeating `init` is idempotent and `uninstall` removes only System1Router-owned entries:
 
 ```sh
 system1router init --host claude-code
@@ -107,7 +117,7 @@ system1router init --host copilot-vscode
 system1router init --host generic
 ```
 
-Use `--host-config /path/to/host-config.json` for a test or non-default host configuration. OpenCode loads the server and TUI entries from `.opencode/opencode.json` and `.opencode/tui.json`; ensure `system1router` is on `PATH` and restart OpenCode after plugin changes. In the interactive TUI, System1Router displays a native Yes/Cancel confirmation before generation. Accepting applies the recommended model and variant to that same request; declining or timing out keeps the current model. Headless OpenCode runs fail open without changing models.
+Use `--host-config /path/to/host-config.json` for a test or non-default host configuration. OpenCode loads server plugins from its plugin directories and TUI plugins from `tui.json`; the installer registers both for the selected scope. Restart OpenCode after installation or plugin updates. In the interactive TUI, System1Router displays a native model choice before generation. Accepting applies the recommended model and variant to that same request; declining or timing out keeps the current model. Headless OpenCode runs fail open without changing models.
 
 OpenCode offers three router commands: `/s1router_toogle` (also accepts `/s1router_toggle`) flips routing on/off; `/s1router_config` opens the menu to toggle routing and verbose traces or copy the config and provider-log paths; `/s1router_stats` shows calls by model and the share of answered suggestions accepted. The config file must exist to use the toggle. Routing status is prepended to the prompt as a compact S1R/class/model/variant block and is excluded from model context. Classification receives the current prompt unchanged plus recent conversation text, tool results/usage, and file references. This context is redacted and bounded by `redaction.maxContextChars` (4,000 characters by default). In verbose mode, expand the native Thought section to inspect the router input and redacted System One request/response. These trace parts are excluded from model context. Provider exchanges are stored in `~/.local/state/system1router/provider-debug.jsonl` (or `$XDG_STATE_HOME/system1router/provider-debug.jsonl`). Usage stats are stored locally in `usage.jsonl` alongside the core's `events.jsonl`; disabling telemetry disables new stats. The native executable reads config and `.env` for every request; changes to plugin files need an OpenCode restart.
 
@@ -123,6 +133,9 @@ printf '%s\n' '{"protocolVersion":"1","host":"generic","event":"user_prompt","se
 
 ```sh
 system1router --version
+system1router --help
+system1router install --scope global
+system1router update --check
 system1router doctor --config ~/.config/system1router/config.json
 system1router init --host claude-code
 system1router uninstall --host claude-code

@@ -64,7 +64,7 @@ The executable will never emit human-readable logs on stdout because hosts parse
 
 ### Thin host adapters and idempotent installation
 
-`system1router init --host <name>` will install the smallest supported adapter for the selected host: a command-hook entry for Claude Code, Codex, Copilot, or VS Code, and a TypeScript plugin shim for OpenCode where required. Installation must preserve unrelated entries, be repeatable, record the installed version/hash, and support `uninstall` and `doctor` commands. Host adapters translate native event schemas into the normalized executable protocol and translate its response back into the host’s documented response schema.
+`system1router install` will offer project-local or user-global OpenCode plugin installation. OpenCode server and TUI plugins use their respective supported plugin locations and registries. `system1router init --host <name>` installs command-hook entries for Claude Code, Codex, Copilot, or VS Code. Installation must preserve unrelated configuration, be repeatable, record the installed version, and support `uninstall`, `update`, and `doctor` commands. Host adapters translate native event schemas into the normalized executable protocol and translate its response back into the host’s documented response schema.
 
 The executable owns context projection, classification, policy, consent-independent decisions, redaction, telemetry, and gateway coordination. Host adapters own only lifecycle registration and UI/response translation.
 
