@@ -362,8 +362,22 @@ fn uninstall_opencode_at(root: &Path, scope: OpenCodeScope) -> Result<Value, Str
 }
 
 pub fn doctor(config: &Config) -> Value {
-    let hosts = [Host::OpenCode, Host::ClaudeCode, Host::Codex, Host::CopilotCli, Host::CopilotVsCode, Host::Generic].into_iter().map(|host| json!({ "host": host.as_str(), "apiVersion": host.api_version(), "capability": host.capability(), "configPath": default_config_path(host), "installed": host_installation_present(host) })).collect::<Vec<_>>();
-    json!({ "version": INSTALL_VERSION, "protocolVersion": PROTOCOL_VERSION, "hosts": hosts, "config": config.safe_summary() })
+    let all = [Host::OpenCode, Host::ClaudeCode, Host::Codex, Host::CopilotCli, Host::CopilotVsCode, Host::Generic];
+    let rules_for = |host: Host| config.rules.iter().filter(|rule| rule.host.as_deref().is_none_or(|name| Host::parse(name) == Some(host))).count();
+    let hosts = all.into_iter().map(|host| json!({ "host": host.as_str(), "apiVersion": host.api_version(), "capability": host.capability(), "configPath": default_config_path(host), "installed": host_installation_present(host), "rules": rules_for(host) })).collect::<Vec<_>>();
+    let summary = config.safe_summary();
+    let mut problems: Vec<String> = Vec::new();
+    if !config.routing.enabled { problems.push("routing is disabled: set routing.enabled to true (or use /s1router_toggle in OpenCode)".into()); }
+    let provider_ready = match config.providers.selected.as_str() { "jev" => summary["jevConfigured"] == true, "laya" => summary["layaConfigured"] == true, _ => false };
+    if !provider_ready { problems.push(format!("decision provider `{}` is not usable: select jev or laya and set its endpoint/credential (see README)", config.providers.selected)); }
+    if config.rules.is_empty() { problems.push("no routing rules: add one rule per routing class you want to route".into()); }
+    for host in all.into_iter().filter(|host| host_installation_present(*host)) {
+        if rules_for(host) == 0 { problems.push(format!("{} is installed but no rule applies to it (rules with \"host\": \"{}\" or no host)", host.as_str(), host.as_str())); }
+    }
+    for rule in config.rules.iter().filter(|rule| rule.host.as_deref().is_some_and(|name| Host::parse(name).is_none())) {
+        problems.push(format!("rule {} names unknown host {:?}", rule.id, rule.host.as_deref().unwrap_or_default()));
+    }
+    json!({ "version": INSTALL_VERSION, "protocolVersion": PROTOCOL_VERSION, "ready": problems.is_empty(), "problems": problems, "hosts": hosts, "config": summary })
 }
 
 fn installation_hash(host: Host, command: &str) -> String { let mut hash = 2_166_136_261_u64; for byte in format!("{}:{command}:{INSTALL_VERSION}", host.as_str()).bytes() { hash = (hash ^ u64::from(byte)).wrapping_mul(16_777_619); } format!("{hash:016x}") }
