@@ -34,8 +34,20 @@ pub fn alternative_possible(event: &NormalizedEvent, config: &Config) -> bool {
             || target.provider.as_deref().is_some_and(|provider| provider != current.provider)
             || target.variant.as_ref().is_some_and(|variant| Some(variant) != current.variant.as_ref())
     };
-    config.rules.iter().any(|rule| matches_scope(rule, event) && differs(&rule.target))
-        || config.default_recommendation.target.as_ref().is_some_and(differs)
+    let usable = |target: &PolicyTarget| usable_without_catalog(target, event);
+    config.rules.iter().any(|rule| matches_scope(rule, event) && usable(&rule.target) && differs(&rule.target))
+        || config.default_recommendation.target.as_ref().is_some_and(|target| usable(target) && differs(target))
+}
+
+/// Without a catalog the host's providers are unknown; the only provider known
+/// to work is the current one, so targets on other providers are ignored
+/// (for example OpenAI rules while running Claude Code).
+fn usable_without_catalog(target: &PolicyTarget, event: &NormalizedEvent) -> bool {
+    if !event.catalog.models.is_empty() || target.gateway_target.is_some() { return true; }
+    match (&event.current_model, &target.provider) {
+        (Some(current), Some(provider)) => provider == &current.provider,
+        _ => true,
+    }
 }
 
 /// Estimates whether switching models costs more on the next request than it
@@ -92,6 +104,7 @@ fn materialize(rule_id: String, mode: RoutingMode, target: &crate::protocol::Pol
         return Some(PolicyResolution::Recommendation(Recommendation { rule_id, mode, provider: None, model: None, variant: gateway.variant.clone(), gateway_target: Some(gateway), reason: reason.unwrap_or_else(|| "gateway policy match".into()), routing_class: classification.routing_class.clone(), task_type: classification.task_type.clone(), confidence: classification.confidence.clone() }));
     }
     let model = target.model.as_ref()?;
+    if !usable_without_catalog(target, event) { return None; }
     let provider = target.provider.clone().unwrap_or_else(|| "default".into());
     let negotiated = negotiate_mode(mode, &event.capabilities, config);
     // A model is only ever applied after catalog verification. Advisory hosts
@@ -148,6 +161,16 @@ mod tests {
         override_config.rules[0].mode = Some(RoutingMode::FullOverride);
         event.capabilities = CapabilityHints { level: CapabilityLevel::FullOverride, model_mutation: true, ..Default::default() };
         assert!(matches!(resolve(&classification, &event, &override_config), PolicyResolution::Unavailable(_)));
+    }
+    #[test] fn catalogless_hosts_ignore_other_providers() {
+        let (config, mut event, classification) = fixture();
+        event.catalog.models.clear();
+        event.capabilities.level = CapabilityLevel::ConsentOnly;
+        event.current_model = Some(ModelState { provider: "anthropic".into(), model: "claude-opus-5-5".into(), variant: None, scope: None });
+        assert!(!alternative_possible(&event, &config), "rule targets provider p, which this host cannot use");
+        assert!(!matches!(resolve(&classification, &event, &config), PolicyResolution::Recommendation(_)));
+        event.current_model.as_mut().unwrap().provider = "p".into();
+        assert!(alternative_possible(&event, &config));
     }
     #[test] fn cache_guard_only_blocks_downgrades_that_cost_more() {
         let (_, mut event, _) = fixture();

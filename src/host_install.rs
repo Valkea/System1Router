@@ -363,7 +363,9 @@ fn uninstall_opencode_at(root: &Path, scope: OpenCodeScope) -> Result<Value, Str
 
 pub fn doctor(config: &Config) -> Value {
     let all = [Host::OpenCode, Host::ClaudeCode, Host::Codex, Host::CopilotCli, Host::CopilotVsCode, Host::Generic];
-    let rules_for = |host: Host| config.rules.iter().filter(|rule| rule.host.as_deref().is_none_or(|name| Host::parse(name) == Some(host))).count();
+    // Claude Code has no catalog: only Anthropic targets can be suggested there.
+    let rules_for = |host: Host| config.rules.iter().filter(|rule| rule.host.as_deref().is_none_or(|name| Host::parse(name) == Some(host))
+        && (host != Host::ClaudeCode || rule.target.provider.as_deref().is_none_or(|provider| provider == "anthropic"))).count();
     let hosts = all.into_iter().map(|host| json!({ "host": host.as_str(), "apiVersion": host.api_version(), "capability": host.capability(), "configPath": default_config_path(host), "installed": host_installation_present(host), "rules": rules_for(host) })).collect::<Vec<_>>();
     let summary = config.safe_summary();
     let mut problems: Vec<String> = Vec::new();
