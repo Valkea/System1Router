@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import type { TuiPlugin } from "@opencode-ai/plugin/tui";
-import { configFilePath, consentDirectory, providerLogPath, readStats, routerEnabled, verboseEnabled, writeJsonAtomic, type ConsentRequest } from "./shared";
+import { configFilePath, consentDirectory, forgetPreferences, providerLogPath, readPreferences, readStats, rememberChoice, routerEnabled, verboseEnabled, writeJsonAtomic, type ConsentRequest } from "./shared";
 
 function verboseStatePath(): string {
   return path.join(consentDirectory(), "verbose.json");
@@ -231,10 +231,14 @@ export const System1RouterTui: TuiPlugin = async (api) => {
       await copyLogPath();
       return;
     }
+    if (action === "forget") {
+      const count = await forgetPreferences().catch(() => 0);
+      api.ui.toast({ title: "System1Router", message: count ? `Forgot ${count} remembered choice${count === 1 ? "" : "s"}; you will be asked again.` : "No remembered choices.", variant: "info" });
+    }
   };
 
   const openControlPanel = async () => {
-    const [enabled, verbose] = await Promise.all([routerEnabled(), verboseEnabled()]);
+    const [enabled, verbose, preferences] = await Promise.all([routerEnabled(), verboseEnabled(), readPreferences()]);
     api.ui.dialog.replace(
       () =>
         api.ui.DialogSelect({
@@ -244,6 +248,13 @@ export const System1RouterTui: TuiPlugin = async (api) => {
             { title: `Verbose traces: ${verbose ? "ON" : "OFF"}`, value: "verbose", description: "Show redacted Jev exchanges with each prompt" },
             { title: "Copy config path…", value: "config", description: configFilePath() },
             { title: "Copy provider log path…", value: "logs", description: providerLogPath() },
+            {
+              title: `Forget remembered choices (${preferences.length})`,
+              value: "forget",
+              description: preferences.length
+                ? preferences.map((item) => `${item.accept ? "always" : "never"}: ${item.key}`).join("; ")
+                : "Choices saved with Always/Never switch in the model dialog",
+            },
           ],
           onSelect: (option) => void runControl(String(option.value)),
         }),
@@ -286,11 +297,17 @@ export const System1RouterTui: TuiPlugin = async (api) => {
     },
   ]);
 
-  const respond = async (request: ConsentRequest, accepted: boolean) => {
+  const respond = async (request: ConsentRequest, accepted: boolean, remember = false) => {
     if (activeId !== request.id) return;
     activeId = undefined;
     activeExpiresAt = 0;
     stopConsentCountdown();
+    if (remember) {
+      await rememberChoice(request.current, request.recommendation, accepted).then(
+        () => api.ui.toast({ title: "System1Router", message: `Remembered: ${accepted ? "always switch" : "never switch"} ${formatModel(request.current)} → ${formatModel(request.recommendation)}. Reset in /s1router_config.`, variant: "info" }),
+        () => {},
+      );
+    }
     await writeJsonAtomic(path.join(directory, `${request.id}.response.json`), {
       id: request.id,
       accepted,
@@ -304,7 +321,9 @@ export const System1RouterTui: TuiPlugin = async (api) => {
     if (disposed || activeId !== request.id) return;
     const requestPath = path.join(directory, `${request.id}.request.json`);
     const timeoutMs = Math.max(1, request.expiresAt - request.createdAt);
-    let selected: "suggested" | "current" = "suggested";
+    type Choice = "suggested" | "current" | "always-suggested" | "always-current";
+    const choices: Choice[] = ["suggested", "current", "always-suggested", "always-current"];
+    let selected: Choice = "suggested";
     let expiresAt = request.expiresAt;
     activeExpiresAt = expiresAt;
 
@@ -330,17 +349,31 @@ export const System1RouterTui: TuiPlugin = async (api) => {
               value: "current",
               description: "Continue with the current model.",
             },
+            {
+              title: "Always switch for this pair",
+              value: "always-suggested",
+              description: `From now on use ${formatModel(request.recommendation)} instead of ${formatModel(request.current)} without asking.`,
+            },
+            {
+              title: "Never switch for this pair",
+              value: "always-current",
+              description: `From now on keep ${formatModel(request.current)} when ${formatModel(request.recommendation)} is suggested, without asking.`,
+            },
           ],
           onMove: (option) => {
-            if (option.value !== "suggested" && option.value !== "current") return;
-            if (option.value === selected) return;
-            selected = option.value;
+            const value = option.value as Choice;
+            if (!choices.includes(value) || value === selected) return;
+            selected = value;
             expiresAt = Date.now() + timeoutMs;
             request.expiresAt = expiresAt;
             activeExpiresAt = expiresAt;
             void writeJsonAtomic(requestPath, request).then(render).catch(() => void respond(request, false));
           },
-          onSelect: (option) => void respond(request, option.value === "suggested" && Date.now() < expiresAt),
+          onSelect: (option) => {
+            if (Date.now() >= expiresAt) { void respond(request, false); return; }
+            const value = option.value as Choice;
+            void respond(request, value === "suggested" || value === "always-suggested", value.startsWith("always-"));
+          },
         }),
         () => { if (revision === dialogRevision) void respond(request, false); },
       );

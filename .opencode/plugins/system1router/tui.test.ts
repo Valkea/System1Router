@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { System1RouterTui } from "./tui";
-import { consentDirectory, consentTimeoutMs } from "./shared";
+import { consentDirectory, consentTimeoutMs, rememberedChoice } from "./shared";
 
 test("loads router commands and handles confirmation, cancel and timeout", async () => {
   const root = await fs.mkdtemp(path.join(tmpdir(), "system1router-tui-"));
@@ -50,7 +50,7 @@ test("loads router commands and handles confirmation, cancel and timeout", async
     expect(commands[0]?.slash.aliases).toEqual(["s1router_toggle"]);
     commands[1]!.onSelect();
     await Bun.sleep(30);
-    expect(dialog?.options?.map((option) => option.value)).toEqual(["toggle-router", "verbose", "config", "logs"]);
+    expect(dialog?.options?.map((option) => option.value)).toEqual(["toggle-router", "verbose", "config", "logs", "forget"]);
     dialog?.onSelect?.({ value: "toggle-router" });
     await Bun.sleep(50);
     expect(JSON.parse(await fs.readFile(process.env.SYSTEM1ROUTER_CONFIG, "utf8")).routing.enabled).toBe(false);
@@ -72,7 +72,7 @@ test("loads router commands and handles confirmation, cancel and timeout", async
     await fs.writeFile(path.join(directory, "sample.request.json"), JSON.stringify(request));
     for (let i = 0; i < 20 && !dialog?.title.startsWith("Category: code_hard"); i++) await Bun.sleep(50);
     expect(dialog?.title).toMatch(/^Category: code_hard · 0:[0-5]\d left$/);
-    expect(dialog?.options?.map((option) => option.title)).toEqual(["Use suggested: p/new (high)", "Keep current: p/old (low)"]);
+    expect(dialog?.options?.map((option) => option.title)).toEqual(["Use suggested: p/new (high)", "Keep current: p/old (low)", "Always switch for this pair", "Never switch for this pair"]);
     expect(dialog?.skipFilter).toBe(true);
     expect(dialog?.current).toBe("suggested"); // Use suggested remains the default selection.
     const initialTitle = dialog?.title;
@@ -111,6 +111,14 @@ test("loads router commands and handles confirmation, cancel and timeout", async
       await Bun.sleep(25);
     }
     expect(JSON.parse(await fs.readFile(path.join(directory, "cancelled.response.json"), "utf8")).accepted).toBe(false);
+
+    const always = { ...request, id: "always", createdAt: Date.now(), expiresAt: Date.now() + 3000 };
+    await fs.writeFile(path.join(directory, "always.request.json"), JSON.stringify(always));
+    for (let i = 0; i < 20 && !dialog?.title.startsWith("Category: code_hard"); i++) await Bun.sleep(50);
+    dialog?.onSelect?.({ value: "always-current" });
+    await Bun.sleep(50);
+    expect(JSON.parse(await fs.readFile(path.join(directory, "always.response.json"), "utf8")).accepted).toBe(false);
+    expect(await rememberedChoice(request.current, request.recommendation)).toBe(false);
 
     const expiring = { ...request, id: "expiring", createdAt: Date.now(), expiresAt: Date.now() + 1100 };
     await fs.writeFile(path.join(directory, "expiring.request.json"), JSON.stringify(expiring));

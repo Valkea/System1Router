@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { System1RouterServer } from "./server";
-import { consentDirectory, readStats } from "./shared";
+import { consentDirectory, forgetPreferences, readStats, rememberChoice } from "./shared";
 
 const binary = path.resolve(import.meta.dir, "../../../target/debug/system1router");
 
@@ -32,18 +32,22 @@ test("routes the same turn and counts actual acceptances, declines and missing U
         { type: "text", text: "We are implementing the parser." },
         { type: "file", filename: path.join(root, "src", "parser.rs"), mime: "text/plain", url: "file:///parser.rs" },
       ] },
-      { info: { id: "prior-assistant", role: "assistant" }, parts: [
+      { info: { id: "prior-assistant", role: "assistant", tokens: { input: 1200, output: 50, cache: { read: 3000, write: 0 } } }, parts: [
         { type: "text", text: "The parser uses recursive descent." },
         { type: "tool", tool: "read", state: { status: "completed", input: { filePath: path.join(root, "src", "parser.rs") }, output: "parse_expression reads the left-hand token." } },
       ] },
       { info: { id: "first", role: "user" }, parts: [{ type: "text", text: "Make a small change" }] },
     ];
     const toasts: string[] = [];
+    let catalogCalls = 0;
     const plugin = await System1RouterServer({
       directory: root,
       client: {
         session: { messages: async () => ({ data: history }) },
-        provider: { list: async () => ({ data: { connected: ["p"], all: [{ id: "p", models: { current: { id: "current" }, suggested: { id: "suggested" } } }] } }) },
+        provider: { list: async () => { catalogCalls++; return { data: { connected: ["p"], all: [{ id: "p", models: {
+          current: { id: "current", variants: { "current-variant": {} } },
+          suggested: { id: "suggested", variants: { high: {}, low: { disabled: true } } },
+        } }] } }; } },
         tui: { showToast: async ({ body }: { body: { message: string } }) => { toasts.push(body.message); } },
       },
     } as never);
@@ -121,16 +125,13 @@ test("routes the same turn and counts actual acceptances, declines and missing U
     const currentRequestStart = providerInput.state?.lastIndexOf(currentRequestMarker) ?? -1;
     expect(currentRequestStart).toBeGreaterThanOrEqual(0);
     expect(providerInput.state?.slice(currentRequestStart + currentRequestMarker.length)).toBe("Make a small change");
-    const routedContext = JSON.parse(providerInput.state!.slice(0, currentRequestStart)) as {
-      conversationSummary?: string;
-      files?: string[];
-      tools?: string[];
-    };
-    expect(routedContext.conversationSummary).toContain("We are implementing the parser.");
-    expect(routedContext.conversationSummary).not.toContain("Make a small change");
-    expect(routedContext.conversationSummary).toContain('Input: {"filePath":"src/parser.rs"}');
-    expect(routedContext.files).toContain("src/parser.rs");
-    expect(routedContext.tools).toContain("read");
+    const routedContext = providerInput.state!.slice(0, currentRequestStart);
+    expect(routedContext).toContain("Recent conversation:\nUser:\nWe are implementing the parser.");
+    expect(routedContext).not.toContain("Make a small change");
+    expect(routedContext).not.toContain("null");
+    expect(routedContext).toContain('Input: {"filePath":"src/parser.rs"}');
+    expect(routedContext).toContain("Files in play: src/parser.rs");
+    expect(routedContext).toContain("Tools used: read");
     expect(acceptedDetails?.text).toContain("Output:\n");
     expect(acceptedDetails?.text).toContain("Jev request:");
     expect(acceptedDetails?.text).toContain("Jev response:");
@@ -145,15 +146,31 @@ test("routes the same turn and counts actual acceptances, declines and missing U
     const missingUi = await send("third");
     expect(missingUi.message.model.modelID).toBe("current");
     expect(toasts).toContain("Routing this request…");
+    expect(catalogCalls).toBe(1); // cached across turns
+
+    // "Never switch" answers future identical suggestions without a dialog.
+    await rememberChoice({ provider: "p", model: "current", variant: "current-variant" }, { provider: "p", model: "suggested", variant: "high" }, false);
+    await fs.rm(path.join(consentDirectory(), "heartbeat.json"), { force: true });
+    const rememberedOutput = await send("remembered");
+    expect(rememberedOutput.message.model.modelID).toBe("current");
+    expect(rememberedOutput.parts.some((part) => part.text === "╭─ → S1R / code_simple\n│  ◇ current · current-variant\n╰─\n")).toBe(true);
+    await rememberChoice({ provider: "p", model: "current", variant: "current-variant" }, { provider: "p", model: "suggested", variant: "high" }, true);
+    const rememberedAccept = await send("remembered-accept");
+    expect(rememberedAccept.message.model.modelID).toBe("suggested");
+    await forgetPreferences();
+
     const stats = await readStats();
     expect(observedTimeouts).toEqual([500, 500]);
-    expect(stats.calls).toBe(3);
-    expect(stats.models).toEqual({ "p/suggested": 1, "p/current": 2 });
-    expect([stats.suggestions, stats.accepted, stats.declined]).toEqual([2, 1, 1]);
+    expect(stats.calls).toBe(5);
+    expect(stats.models).toEqual({ "p/suggested": 2, "p/current": 3 });
+    expect([stats.suggestions, stats.accepted, stats.declined]).toEqual([4, 2, 2]);
+    const events = (await fs.readFile(process.env.SYSTEM1ROUTER_TELEMETRY!, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as { policyOutcome?: string });
+    expect(events.some((event) => event.policyOutcome === "declined")).toBe(false); // the core no longer guesses the user's answer
 
     const alreadySelected = { message: { id: "same", model: { providerID: "p", modelID: "suggested", variant: "high" } }, parts: [{ type: "text", text: "Another simple task" }] };
     await plugin["chat.message"]?.({ sessionID: "s", messageID: "same", model: { providerID: "p", modelID: "suggested" } } as never, alreadySelected as never);
-    expect(alreadySelected.parts.some((part) => part.text === "╭─ → S1R / code_simple\n│  ◇ suggested · high\n╰─\n")).toBe(true);
+    // Every rule already points at the current model, so the provider is not called at all.
+    expect(alreadySelected.parts.some((part) => part.text === "╭─ → S1R\n│  ◇ suggested · high\n╰─\n")).toBe(true);
 
     await fs.writeFile(process.env.SYSTEM1ROUTER_CONFIG, JSON.stringify({ routing: { enabled: true, minConfidence: 9 } }));
     const invalidConfig = await send("fourth");

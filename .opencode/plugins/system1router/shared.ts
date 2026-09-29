@@ -101,6 +101,7 @@ export type Usage = {
   model?: string;
   suggestedModel?: string;
   accepted?: boolean;
+  remembered?: boolean;
   policyOutcome?: string;
 };
 
@@ -170,4 +171,50 @@ export async function readStats(): Promise<Stats> {
     } catch { /* No history yet. */ }
   }
   return summarizeUsage(entries);
+}
+
+type ModelChoice = { provider?: string; model?: string; variant?: string };
+
+/** A remembered answer for one current → suggested model pair. */
+export type ConsentPreference = { key: string; accept: boolean; current: string; suggested: string; createdAt: number };
+
+function choiceLabel(choice?: ModelChoice): string {
+  if (!choice?.model) return "default";
+  return `${choice.provider ? `${choice.provider}/` : ""}${choice.model}${choice.variant ? ` (${choice.variant})` : ""}`;
+}
+
+export function preferenceKey(current: ModelChoice | undefined, suggested: ModelChoice): string {
+  return `${choiceLabel(current)} → ${choiceLabel(suggested)}`;
+}
+
+function preferencesPath(): string {
+  return path.join(stateDirectory(), "consent-preferences.json");
+}
+
+export async function readPreferences(): Promise<ConsentPreference[]> {
+  try {
+    const value = JSON.parse(await fs.readFile(preferencesPath(), "utf8")) as { preferences?: ConsentPreference[] };
+    return Array.isArray(value.preferences) ? value.preferences.filter((item) => typeof item?.key === "string" && typeof item.accept === "boolean") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Returns the remembered answer for this pair, if the user saved one. */
+export async function rememberedChoice(current: ModelChoice | undefined, suggested: ModelChoice): Promise<boolean | undefined> {
+  const key = preferenceKey(current, suggested);
+  return (await readPreferences()).find((item) => item.key === key)?.accept;
+}
+
+export async function rememberChoice(current: ModelChoice | undefined, suggested: ModelChoice, accept: boolean): Promise<void> {
+  const key = preferenceKey(current, suggested);
+  const preferences = (await readPreferences()).filter((item) => item.key !== key);
+  preferences.push({ key, accept, current: choiceLabel(current), suggested: choiceLabel(suggested), createdAt: Date.now() });
+  await writeJsonAtomic(preferencesPath(), { preferences });
+}
+
+export async function forgetPreferences(): Promise<number> {
+  const count = (await readPreferences()).length;
+  await fs.rm(preferencesPath(), { force: true });
+  return count;
 }

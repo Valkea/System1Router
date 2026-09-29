@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import type { Plugin } from "@opencode-ai/plugin";
-import { consentDirectory, consentTimeoutMs, recordUsage, routerEnabled, verboseEnabled, writeJsonAtomic, type ConsentRequest } from "./shared";
+import { consentDirectory, consentTimeoutMs, recordUsage, rememberedChoice, routerEnabled, verboseEnabled, writeJsonAtomic, type ConsentRequest } from "./shared";
 
 type RouterResult = {
   consent?: string;
@@ -144,6 +144,7 @@ type RecordValue = Record<string, unknown>;
 type SessionMessage = { info?: RecordValue; parts?: unknown[] };
 type RouterContext = {
   conversationSummary?: string;
+  contextTokens?: number;
   files: string[];
   tools: string[];
   attachments: RecordValue[];
@@ -242,6 +243,7 @@ function projectConversationContext(
   const attachments: RecordValue[] = [];
   const toolCalls: RecordValue[] = [];
   const currentFiles: string[] = [];
+  let contextTokens: number | undefined;
 
   for (const rawPart of currentParts) {
     const part = asRecord(rawPart);
@@ -257,6 +259,13 @@ function projectConversationContext(
     if (messageID === currentMessageID) continue;
     const role = info?.role === "user" ? "User" : info?.role === "assistant" ? "Assistant" : undefined;
     if (!role) continue;
+    // The latest assistant usage tells how much context the provider has cached.
+    const tokens = asRecord(info?.tokens);
+    if (role === "Assistant" && tokens) {
+      const cache = asRecord(tokens.cache) ?? {};
+      const total = [tokens.input, cache.read, cache.write].reduce<number>((sum, value) => sum + (typeof value === "number" ? value : 0), 0);
+      if (total > 0) contextTokens = total;
+    }
 
     const messageParts: string[] = [];
     for (const rawPart of message.parts ?? []) {
@@ -326,6 +335,7 @@ function projectConversationContext(
 
   return {
     ...(summary ? { conversationSummary: summary } : {}),
+    ...(contextTokens ? { contextTokens } : {}),
     files: recentUnique(files, 8).map((file) => clipText(file, 64)),
     tools: recentUnique(tools, 10).map((tool) => clipText(tool, 32)),
     attachments: uniqueAttachments,
@@ -385,8 +395,58 @@ function invoke(binary: string, payload: unknown, verbose: boolean, timeoutMs = 
   });
 }
 
+type CatalogModel = { provider: string; model: string; variants: string[]; cost?: { input: number; output: number; cacheRead: number } };
+const CATALOG_TTL_MS = 60_000;
+
+function catalogFromProviders(data: unknown): CatalogModel[] {
+  const value = asRecord(data);
+  const connected = Array.isArray(value?.connected) ? value.connected : [];
+  const providers = Array.isArray(value?.all) ? value.all : [];
+  return providers.flatMap((rawProvider) => {
+    const provider = asRecord(rawProvider);
+    if (typeof provider?.id !== "string" || !connected.includes(provider.id)) return [];
+    return Object.values(asRecord(provider.models) ?? {}).flatMap((rawModel) => {
+      const model = asRecord(rawModel);
+      if (typeof model?.id !== "string") return [];
+      const variants = Object.entries(asRecord(model.variants) ?? {})
+        .filter(([, options]) => asRecord(options)?.disabled !== true)
+        .map(([name]) => name);
+      const cost = asRecord(model.cost);
+      const cache = asRecord(cost?.cache);
+      const price = (value: unknown) => (typeof value === "number" && Number.isFinite(value) ? value : 0);
+      return [{
+        provider: provider.id as string,
+        model: model.id,
+        variants,
+        ...(cost ? { cost: { input: price(cost.input), output: price(cost.output), cacheRead: price(cache?.read) } } : {}),
+      }];
+    });
+  });
+}
+
 export const System1RouterServer: Plugin = async ({ client, directory }) => {
   const seen = new Set<string>();
+  let catalogCache: { at: number; models: CatalogModel[] } | undefined;
+
+  // The provider list rarely changes; refetching it on every prompt adds latency before the dialog.
+  const loadCatalog = async (): Promise<CatalogModel[]> => {
+    if (catalogCache && Date.now() - catalogCache.at < CATALOG_TTL_MS) return catalogCache.models;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const providers = await Promise.race([
+        client.provider.list({ query: { directory } }),
+        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("catalog timeout")), 1500); }),
+      ]);
+      const models = catalogFromProviders(providers.data);
+      if (models.length) catalogCache = { at: Date.now(), models };
+      return models;
+    } catch {
+      // A missing catalog prevents an unverified switch, but not the turn.
+      return catalogCache?.models ?? [];
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
   const notified = new Set<string>();
   const binary = process.env.SYSTEM1ROUTER_BIN ?? "system1router";
 
@@ -430,27 +490,12 @@ export const System1RouterServer: Plugin = async ({ client, directory }) => {
         title: "System1Router", message: "Routing this request…", variant: "info", duration: 3000,
       } }).catch(() => {});
 
-      const historyPromise = sessionHistory(client, input.sessionID, directory);
-      let catalog: unknown[] = [];
-      try {
-        const providers = await Promise.race([
-          client.provider.list({ query: { directory } }),
-          new Promise<never>((_, reject) => setTimeout(() => reject(new Error("catalog timeout")), 1500)),
-        ]);
-        catalog = providers.data?.all.filter((provider) => providers.data?.connected.includes(provider.id)).flatMap((provider) =>
-          Object.values(provider.models).map((model) => ({
-            provider: provider.id,
-            model: model.id,
-            variants: [],
-          })),
-        ) ?? [];
-      } catch {
-        // A missing catalog prevents an unverified switch, but not the turn.
-      }
-
-      const verbose = await verboseEnabled();
+      const [history, catalog, verbose] = await Promise.all([
+        sessionHistory(client, input.sessionID, directory),
+        loadCatalog(),
+        verboseEnabled(),
+      ]);
       const query = textFromParts(output.parts);
-      const history = await historyPromise;
       const context = projectConversationContext(history, messageID, output.parts, directory);
       const routingStartedAt = Date.now();
       const result = await invoke(binary, {
@@ -468,6 +513,7 @@ export const System1RouterServer: Plugin = async ({ client, directory }) => {
           conversationSummary: context.conversationSummary,
           files: context.files,
           tools: context.tools,
+          ...(context.contextTokens ? { contextTokens: context.contextTokens } : {}),
         },
         catalog: { models: catalog },
         capabilities: {
@@ -510,7 +556,8 @@ export const System1RouterServer: Plugin = async ({ client, directory }) => {
         return;
       }
       const suggested = `${recommendation.provider}/${recommendation.model}`;
-      if (current === suggested && currentVariant === recommendation.variant) {
+      // A rule without a variant accepts whatever effort the current model uses.
+      if (current === suggested && (!recommendation.variant || currentVariant === recommendation.variant)) {
         appendVerboseDetails();
         prependRoutingStatus(input.sessionID, output.message.id, output, routingStatusText(routingClass, recommendation.model, recommendation.variant));
         await recordUsage({ host: "opencode", model: current, policyOutcome: "same-model" }).catch(() => {});
@@ -523,25 +570,18 @@ export const System1RouterServer: Plugin = async ({ client, directory }) => {
         return;
       }
 
+      const currentChoice = model ? { provider: model.providerID, model: model.modelID, variant: currentVariant } : undefined;
+      const suggestedChoice = {
+        provider: recommendation.provider,
+        model: recommendation.model,
+        variant: recommendation.variant,
+        routingClass: recommendation.routingClass,
+        reason: recommendation.reason,
+      };
+      const remembered = result.consent === "use_suggested_model" ? undefined : await rememberedChoice(currentChoice, suggestedChoice);
       const accepted = result.consent === "use_suggested_model"
         ? true
-        : await requestConsent(
-            consentDirectory(),
-            model
-              ? {
-                  provider: model.providerID,
-                  model: model.modelID,
-                  variant: userMessage.model.variant ?? input.variant,
-                }
-              : undefined,
-            {
-              provider: recommendation.provider,
-              model: recommendation.model,
-              variant: recommendation.variant,
-              routingClass: recommendation.routingClass,
-              reason: recommendation.reason,
-            },
-          );
+        : remembered ?? await requestConsent(consentDirectory(), currentChoice, suggestedChoice);
       if (accepted === undefined) {
         await notify(
           "consent-ui-unavailable",
@@ -555,7 +595,9 @@ export const System1RouterServer: Plugin = async ({ client, directory }) => {
       }
       if (!accepted) {
         appendVerboseDetails();
-        await recordUsage({ host: "opencode", model: current, suggestedModel: suggested, accepted: false }).catch(() => {});
+        // A remembered "never" is a standing choice, so show the model that answers.
+        if (remembered === false) prependRoutingStatus(input.sessionID, output.message.id, output, routingStatusText(routingClass, currentModelName, currentVariant));
+        await recordUsage({ host: "opencode", model: current, suggestedModel: suggested, accepted: false, ...(remembered === false ? { remembered: true } : {}) }).catch(() => {});
         return;
       }
       if (!(await routerEnabled())) {
@@ -574,7 +616,7 @@ export const System1RouterServer: Plugin = async ({ client, directory }) => {
       };
       appendVerboseDetails();
       prependRoutingStatus(input.sessionID, output.message.id, output, routingStatusText(routingClass, recommendation.model, recommendation.variant));
-      await recordUsage({ host: "opencode", model: suggested, suggestedModel: suggested, accepted: true }).catch(() => {});
+      await recordUsage({ host: "opencode", model: suggested, suggestedModel: suggested, accepted: true, ...(remembered ? { remembered: true } : {}) }).catch(() => {});
       await notify(
         `${key}:accepted`,
         `Using ${suggested}${recommendation.variant ? ` (${recommendation.variant})` : ""} for this request.`,
