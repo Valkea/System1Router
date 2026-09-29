@@ -38,6 +38,7 @@ pub fn normalize(payload: Value, fallback_cwd: Option<String>) -> NormalizedEven
     // Slash commands are handled by Claude Code itself; there is nothing to route.
     let query = if prompt.trim_start().starts_with('/') { String::new() } else { prompt };
     let transcript = text("transcript_path").map(|path| read_transcript(Path::new(&path), cwd.as_deref())).unwrap_or_default();
+    let cwd_for_settings = cwd.clone();
     NormalizedEvent {
         protocol_version: PROTOCOL_VERSION.into(),
         host: Host::ClaudeCode.as_str().into(),
@@ -46,7 +47,9 @@ pub fn normalize(payload: Value, fallback_cwd: Option<String>) -> NormalizedEven
         turn_id: None,
         cwd,
         request: RequestPayload { query, ..Default::default() },
-        current_model: transcript.model.clone().map(|model| ModelState { provider: "anthropic".into(), model, variant: None, scope: Some(session_id) }),
+        // The transcript shows the model actually answering; before the first
+        // reply, fall back to the configured model.
+        current_model: transcript.model.clone().or_else(|| configured_model(cwd_for_settings.as_deref())).map(|model| ModelState { provider: "anthropic".into(), model, variant: None, scope: Some(session_id) }),
         context: BoundedContext {
             conversation_summary: transcript.summary,
             files: transcript.files,
@@ -55,9 +58,10 @@ pub fn normalize(payload: Value, fallback_cwd: Option<String>) -> NormalizedEven
             ..Default::default()
         },
         catalog: Default::default(),
-        capabilities: CapabilityHints { level: Host::ClaudeCode.capability(), protocol_version: Some(PROTOCOL_VERSION.into()), ..Default::default() },
+        // Consent is asked by holding the prompt and resuming with ".".
+        capabilities: CapabilityHints { level: Host::ClaudeCode.capability(), interactive_consent: true, protocol_version: Some(PROTOCOL_VERSION.into()), ..Default::default() },
         correlation_id: None,
-        metadata: json!({ "hostApiVersion": Host::ClaudeCode.api_version() }),
+        metadata: json!({ "hostApiVersion": Host::ClaudeCode.api_version(), "hostProvider": "anthropic" }),
     }
 }
 
@@ -144,6 +148,91 @@ pub fn parse_transcript(body: &str, cwd: Option<&str>) -> TranscriptContext {
     context.files = recent_unique(files, 8);
     context.tools = recent_unique(tools, 10);
     context
+}
+
+/// The model Claude Code is configured to use: `ANTHROPIC_MODEL`, then the
+/// `model` key of project local, project and user settings (`/model` writes
+/// the user settings).
+pub fn configured_model(cwd: Option<&str>) -> Option<String> {
+    if let Some(model) = env::var("ANTHROPIC_MODEL").ok().filter(|model| !model.trim().is_empty()) { return Some(model); }
+    let mut candidates = Vec::new();
+    if let Some(cwd) = cwd { let root = Path::new(cwd); candidates.push(root.join(".claude/settings.local.json")); candidates.push(root.join(".claude/settings.json")); }
+    candidates.push(settings_path(true, Path::new(".")));
+    candidates.into_iter().find_map(|path| read_settings(&path).ok()?.get("model")?.as_str().map(str::to_owned))
+}
+
+// ---------------------------------------------------------------------------
+// Asking before the request is sent
+//
+// A hook cannot change the model of the prompt being submitted, so when a
+// different model is suggested the prompt is held (blocked, nothing is sent)
+// and remembered for the session. The user optionally runs `/model <name>`
+// and sends "." (or the same prompt again); the hook then lets it through,
+// passing the held prompt as context, without classifying it again.
+
+pub const RESUME: &str = ".";
+const PENDING_TTL_MS: u64 = 30 * 60 * 1000;
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Pending {
+    pub prompt: String,
+    pub suggested: String,
+    pub current: Option<String>,
+    pub at_ms: u64,
+}
+
+fn now_ms() -> u64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|value| value.as_millis() as u64).unwrap_or_default() }
+
+fn pending_path() -> Option<PathBuf> { crate::control::state_directory().map(|directory| directory.join("claude-pending.json")) }
+
+fn load_pending() -> std::collections::BTreeMap<String, Pending> {
+    pending_path().and_then(|path| fs::read(path).ok()).and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default()
+}
+
+fn save_pending(mut pending: std::collections::BTreeMap<String, Pending>) {
+    let Some(path) = pending_path() else { return; };
+    let now = now_ms();
+    pending.retain(|_, item| now.saturating_sub(item.at_ms) < PENDING_TTL_MS);
+    if let Some(parent) = path.parent() { let _ = fs::create_dir_all(parent); }
+    if let Ok(bytes) = serde_json::to_vec(&pending) { let _ = fs::write(path, bytes); }
+}
+
+pub fn hold(session: &str, prompt: &str, suggested: &str, current: Option<&str>) {
+    let mut pending = load_pending();
+    pending.insert(session.into(), Pending { prompt: prompt.into(), suggested: suggested.into(), current: current.map(str::to_owned), at_ms: now_ms() });
+    save_pending(pending);
+}
+
+/// Removes and returns the session's held prompt, if still fresh.
+pub fn take_held(session: &str) -> Option<Pending> {
+    let mut pending = load_pending();
+    let item = pending.remove(session)?;
+    save_pending(pending);
+    (now_ms().saturating_sub(item.at_ms) < PENDING_TTL_MS).then_some(item)
+}
+
+/// Output for a prompt that resumes a held one, or `None` for a new prompt.
+pub fn resume(held: &Pending, prompt: &str) -> Option<Value> {
+    let prompt = prompt.trim();
+    if prompt == held.prompt.trim() { return Some(json!({})); }
+    if prompt != RESUME { return None; }
+    Some(json!({ "hookSpecificOutput": { "hookEventName": HOOK_EVENT, "additionalContext": format!(
+        "System1Router held the user's previous message while they chose a model. Their \".\" means: continue with that message now. Respond to it exactly as if they had just sent it:\n\n{}", held.prompt) } }))
+}
+
+/// Holds the prompt and asks, when the decision suggests another model.
+pub fn ask(decision: &NormalizedDecision, event: &NormalizedEvent) -> Option<Value> {
+    if decision.outcome == DecisionOutcome::Block { return None; }
+    let recommendation = decision.recommendation.as_ref()?;
+    let model = recommendation.model.as_deref()?;
+    let current = event.current_model.as_ref().map(|state| state.model.as_str());
+    if current.is_some_and(|current| same_model(current, model)) { return None; }
+    hold(&event.session_id, &event.request.query, model, current);
+    let percent = (recommendation.confidence.routing_class * 100.0).round();
+    let current_label = current.unwrap_or("the current model");
+    Some(json!({ "decision": "block", "reason": format!(
+        "S1R · {} ({percent:.0}%) suggests {model} instead of {current_label}. {}\n  → switch: /model {model} then send {RESUME}\n  → keep {current_label}: send {RESUME}\nYour message is held and will be sent as is; nothing was sent yet.",
+        recommendation.routing_class, recommendation.reason) }))
 }
 
 /// Router controls typed as prompts. The hook answers them itself and blocks
@@ -482,5 +571,51 @@ not json
         assert!(same_model("claude-opus-5-5", "opus"));
         assert!(same_model("claude-opus-5-5", "claude-opus-5-5"));
         assert!(!same_model("claude-sonnet-5-5", "opus"));
+    }
+}
+
+#[cfg(test)]
+mod ask_tests {
+    use super::*;
+    use crate::protocol::*;
+
+    #[test]
+    fn held_prompts_resume_with_a_dot_or_the_same_text() {
+        let directory = tempfile::tempdir().unwrap();
+        let previous = env::var_os("XDG_STATE_HOME");
+        env::set_var("XDG_STATE_HOME", directory.path());
+        let mut event = normalize(json!({ "session_id": "ask-s", "prompt": "refactor the parser", "hook_event_name": "UserPromptSubmit" }), None);
+        event.current_model = Some(ModelState { provider: "anthropic".into(), model: "claude-sonnet-5-5".into(), variant: None, scope: None });
+        let decision = NormalizedDecision {
+            protocol_version: "1".into(), correlation_id: "c".into(), outcome: DecisionOutcome::Ask, consent: None, capability: CapabilityLevel::ConsentOnly,
+            diagnostic: Diagnostic::info("consent_requested", "ask"), telemetry: None,
+            recommendation: Some(Recommendation { rule_id: "r".into(), mode: RoutingMode::Advisory, provider: Some("anthropic".into()), model: Some("opus".into()), variant: None, gateway_target: None, reason: "Hard work.".into(), routing_class: RoutingClass::CodeHard, task_type: "t".into(), confidence: ClassificationConfidence { routing_class: 0.8, task_type: 1.0, context: 1.0 } }),
+        };
+        let asked = ask(&decision, &event).unwrap();
+        assert_eq!(asked["decision"], "block");
+        assert!(asked["reason"].as_str().unwrap().contains("/model opus then send ."));
+        let held = take_held("ask-s").unwrap();
+        assert_eq!((held.prompt.as_str(), held.suggested.as_str()), ("refactor the parser", "opus"));
+        assert!(take_held("ask-s").is_none(), "a held prompt resumes once");
+        let resumed = resume(&held, " . ").unwrap();
+        assert!(resumed["hookSpecificOutput"]["additionalContext"].as_str().unwrap().ends_with("refactor the parser"));
+        assert_eq!(resume(&held, "refactor the parser"), Some(json!({})));
+        assert_eq!(resume(&held, "something else"), None);
+        event.current_model.as_mut().unwrap().model = "claude-opus-5-5".into();
+        assert!(ask(&decision, &event).is_none(), "no question when already on the suggested model");
+        match previous { Some(value) => env::set_var("XDG_STATE_HOME", value), None => env::remove_var("XDG_STATE_HOME") }
+    }
+
+    #[test]
+    fn first_prompt_uses_the_configured_model() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::create_dir_all(directory.path().join(".claude")).unwrap();
+        fs::write(directory.path().join(".claude/settings.local.json"), r#"{"model":"haiku"}"#).unwrap();
+        let previous = env::var_os("ANTHROPIC_MODEL");
+        env::remove_var("ANTHROPIC_MODEL");
+        assert_eq!(configured_model(directory.path().to_str()).as_deref(), Some("haiku"));
+        if let Some(value) = previous { env::set_var("ANTHROPIC_MODEL", value); }
+        let event = normalize(json!({ "session_id": "s", "prompt": "hi", "hook_event_name": "UserPromptSubmit", "cwd": directory.path() }), None);
+        assert_eq!(event.metadata["hostProvider"], "anthropic");
     }
 }

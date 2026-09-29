@@ -27,8 +27,8 @@ pub fn resolve(classification: &RoutingClassification, event: &NormalizedEvent, 
 /// request away from the current model. When false, classifying the request
 /// cannot change anything, so the provider call is skipped.
 pub fn alternative_possible(event: &NormalizedEvent, config: &Config) -> bool {
-    let Some(current) = &event.current_model else { return true; };
     let differs = |target: &PolicyTarget| {
+        let Some(current) = &event.current_model else { return true; };
         target.gateway_target.is_some()
             || target.model.as_deref() != Some(current.model.as_str())
             || target.provider.as_deref().is_some_and(|provider| provider != current.provider)
@@ -44,8 +44,10 @@ pub fn alternative_possible(event: &NormalizedEvent, config: &Config) -> bool {
 /// (for example OpenAI rules while running Claude Code).
 fn usable_without_catalog(target: &PolicyTarget, event: &NormalizedEvent) -> bool {
     if !event.catalog.models.is_empty() || target.gateway_target.is_some() { return true; }
-    match (&event.current_model, &target.provider) {
-        (Some(current), Some(provider)) => provider == &current.provider,
+    let host_provider = event.current_model.as_ref().map(|current| current.provider.as_str())
+        .or_else(|| event.metadata.get("hostProvider").and_then(serde_json::Value::as_str));
+    match (host_provider, &target.provider) {
+        (Some(host), Some(provider)) => provider == host,
         _ => true,
     }
 }
@@ -172,6 +174,9 @@ mod tests {
         assert!(!matches!(resolve(&classification, &event, &config), PolicyResolution::Recommendation(_)));
         event.current_model.as_mut().unwrap().provider = "p".into();
         assert!(alternative_possible(&event, &config));
+        event.current_model = None;
+        event.metadata = serde_json::json!({ "hostProvider": "anthropic" });
+        assert!(!alternative_possible(&event, &config), "the host provider applies before the first reply too");
     }
     #[test] fn cache_guard_only_blocks_downgrades_that_cost_more() {
         let (_, mut event, _) = fixture();

@@ -83,6 +83,8 @@ pub fn read_stats() -> Stats {
         for entry in text.lines().filter_map(|line| serde_json::from_str::<Value>(line).ok()) {
             let host = entry.get("host").and_then(Value::as_str).unwrap_or("unknown");
             if native && host == "opencode" { continue; }
+            // Held Claude Code prompts are counted when resolved (usage.jsonl).
+            if native && entry.get("policyOutcome").and_then(Value::as_str) == Some("consent-requested") { continue; }
             if entry.get("policyOutcome").and_then(Value::as_str) == Some("disabled") { continue; }
             stats.calls += 1;
             *stats.by_host.entry(host.into()).or_default() += 1;

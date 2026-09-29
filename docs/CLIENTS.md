@@ -27,7 +27,18 @@ The installer adds a `UserPromptSubmit` command hook to `~/.claude/settings.json
 { "hooks": { "UserPromptSubmit": [ { "hooks": [ { "type": "command", "command": "/home/me/.cargo/bin/system1router hook --host claude-code", "timeout": 10 } ] } ] } }
 ```
 
-For each prompt the hook reads the tail of the session transcript for context (recent turns, tools, files), the current model and the cached context size, then classifies the prompt. When a rule suggests a different model it prints a notice such as `S1R · code_hard (80%) → opus instead of claude-sonnet-5-5. Run /model opus to switch; …`. The installer also adds `/s1router_toggle` (optionally `on`/`off`), `/s1router_config` (status, config and log paths) and `/s1router_stats` to `commands/` next to the settings file. The hook answers these itself and blocks the prompt, so they cost no model turn; the answer appears as a hook notice. The command files contain only a fallback instruction (no `!` execution, which Claude Code would run before the hook).
+For each prompt the hook reads the tail of the session transcript for context (recent turns, tools, files), the current model and the cached context size, then classifies the prompt. Before the first reply of a session the current model comes from `ANTHROPIC_MODEL` or the `model` settings key (a `--model` flag is not visible to hooks).
+
+A hook cannot change the model of the prompt being submitted, so with `consent.mode: "interactive"` (the default) the choice is made **before** anything is sent: the prompt is held and Claude Code shows
+
+```
+S1R · code_hard (80%) suggests opus instead of claude-sonnet-5-5. Complex change.
+  → switch: /model opus then send .
+  → keep claude-sonnet-5-5: send .
+Your message is held and will be sent as is; nothing was sent yet.
+```
+
+Sending `.` (or the same prompt again) releases the held message, which Claude receives as context, without a second classification. The choice is recorded for `/s1router_stats` by comparing the model in use with the suggestion. Held prompts expire after 30 minutes; any other prompt replaces them. Note that Claude Code's `/model` also saves the model as your default for new sessions. With any other consent mode the hook only shows the suggestion as a notice and never holds prompts. The installer also adds `/s1router_toggle` (optionally `on`/`off`), `/s1router_config` (status, config and log paths) and `/s1router_stats` to `commands/` next to the settings file. The hook answers these itself and blocks the prompt, so they cost no model turn; the answer appears as a hook notice. The command files contain only a fallback instruction (no `!` execution, which Claude Code would run before the hook).
 
 Nothing is added to the model's context, other slash commands are ignored, and any router failure exits 0 so Claude Code never reports a hook error. Rule targets can use aliases (`opus`, `sonnet`, `haiku`) or full model IDs. Verified with Claude Code 2.1.285.
 

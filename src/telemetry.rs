@@ -35,3 +35,14 @@ pub fn record(decision: &NormalizedDecision, request: &NormalizedEvent, config: 
         if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) { let _ = writeln!(file, "{line}"); }
     }
 }
+
+/// Appends a resolved suggestion to `usage.jsonl`, the file OpenCode also
+/// writes, so stats count what the user actually chose.
+pub fn record_choice(config: &Config, host: &str, model: Option<&str>, suggested: &str, accepted: bool) {
+    if !config.telemetry.enabled || std::env::var("SYSTEM1ROUTER_TELEMETRY_DISABLED").is_ok() { return; }
+    let Some(directory) = crate::control::state_directory() else { return; };
+    let _ = fs::create_dir_all(&directory);
+    let timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|value| value.as_millis() as u64).unwrap_or_default();
+    let line = serde_json::json!({ "host": host, "model": model, "suggestedModel": suggested, "accepted": accepted, "timestampMs": timestamp });
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(directory.join("usage.jsonl")) { let _ = writeln!(file, "{line}"); }
+}

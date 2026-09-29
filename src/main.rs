@@ -385,9 +385,25 @@ fn command_hook(args: &[String], config: Config) {
         Err(error) => { eprintln!("system1router: malformed hook input: {error}"); let decision = bypass("malformed_event", "hook input was not valid JSON", "unknown".into()); print_json(adapters::translate_decision(host, &decision)); std::process::exit(exit_with(EXIT_MALFORMED_EVENT)); }
     };
     if host == Host::ClaudeCode {
-        if let Some(control) = payload.get("prompt").and_then(Value::as_str).and_then(claude_code::control_command) {
+        let prompt = payload.get("prompt").and_then(Value::as_str).unwrap_or_default().to_string();
+        if let Some(control) = claude_code::control_command(&prompt) {
             print_json(claude_code::control_response(&run_control(control, argument(args, "--config").map(Path::new), &config)));
             return;
+        }
+        let session = payload.get("session_id").and_then(Value::as_str).unwrap_or_default().to_string();
+        // Slash commands such as /model do not consume the held prompt.
+        if !prompt.trim_start().starts_with('/') {
+            if let Some(held) = claude_code::take_held(&session) {
+                if let Some(output) = claude_code::resume(&held, &prompt) {
+                    // `/model` updates the settings; the transcript still shows the previous model.
+                    let cwd = payload.get("cwd").and_then(Value::as_str);
+                    let now = claude_code::configured_model(cwd).or(held.current.clone());
+                    let accepted = now.as_deref().is_some_and(|model| claude_code::same_model(model, &held.suggested) || model == held.suggested);
+                    system1router_core::telemetry::record_choice(&config, "claude-code", now.as_deref(), &held.suggested, accepted);
+                    print_json(output);
+                    return;
+                }
+            }
         }
     }
     let event = adapters::normalize(host, payload, env::current_dir().ok().and_then(|path| path.to_str().map(str::to_owned)));
@@ -395,7 +411,9 @@ fn command_hook(args: &[String], config: Config) {
     let decision = process_event_safe(&event, &config, provider.as_ref());
     record_decision(&decision, &event, &config);
     let exit = if decision.diagnostic.code == "unsupported_version" { EXIT_UNSUPPORTED_VERSION } else if decision.diagnostic.code == "internal_error" { EXIT_INTERNAL_ERROR } else { 0 };
-    print_json(adapters::translate_hook_decision(host, &decision, &event));
+    let asked = (host == Host::ClaudeCode && config.consent.mode == system1router_core::config::ConsentMode::Interactive)
+        .then(|| claude_code::ask(&decision, &event)).flatten();
+    print_json(asked.unwrap_or_else(|| adapters::translate_hook_decision(host, &decision, &event)));
     if exit_with(exit) != 0 { std::process::exit(exit); }
 }
 
