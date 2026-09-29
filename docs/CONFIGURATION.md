@@ -27,7 +27,23 @@ The default (`routing.enabled: false`) is a safety state, not a working routing 
 
 Rules are evaluated by ascending `priority`, then configuration order. A rule can match routing class, task type, host, project/session scope, minimum confidence, and `branch=...`, `repository=...`, or `cwd=...` predicates. Targets are checked against the host model catalog. If a matching model is missing from the catalog, the router keeps the current model and reports why. Configure rules for the classes you want to route; an optional `defaultRecommendation` with a target catches classes without a specific rule. Targets must use the exact provider and model IDs exposed by the host. The `reason` on each rule or default recommendation controls the explanation shown to the user; if omitted, the router describes the actual matching rule, class and task type. Gateway targets must be in `gateway.upstreamAllowlist`.
 
-Variants are configured per target with `target.variant`; they are not a separate global setting. A host catalog may advertise allowed variant names through `models[].variants`. The router rejects a configured variant when the host explicitly reports that the variant is unavailable. OpenCode's current provider catalog does not expose variants through the plugin SDK, so configured variants are applied by name and OpenCode handles any unsupported variant response.
+Variants are configured per target with `target.variant`; they are not a separate global setting. OpenCode reports each model's enabled variants, and the router rejects a rule whose variant the model does not offer (the request keeps the current model and the reason is reported). A target without `variant` matches the current model at whatever variant is selected.
+
+Rules without `host` apply to every host, but a host that exposes no model catalog (Claude Code) is only offered targets on its own provider, so OpenAI rules are never suggested inside Claude Code. Add `"host": "claude-code"` rules with Anthropic targets for it:
+
+```json
+{ "id": "cc-hard", "host": "claude-code", "routingClass": "code_hard", "target": { "provider": "anthropic", "model": "opus" }, "reason": "Complex or high-risk change" }
+```
+
+Run `system1router doctor` after editing: `problems` lists what prevents routing (disabled, unusable provider, no rule for an installed host) and `advice` flags price inversions, such as a simple class routed to a pricier model than a hard class.
+
+## Accuracy and efficiency
+
+- **Class selection** (`routing.classSelection`, default `median`). The six classes are two ordinal scales. When the provider returns probabilities, the router picks code vs question by total probability mass and the difficulty tier by the median of that distribution, instead of the single top class. This avoids choosing *simple* when most of the mass says *moderate or harder*. Use `argmax` to keep the provider's top choice.
+- **What the classifier sees.** The Jev `state` is compact labelled text (files, tools, recent conversation, then the current request), with empty fields omitted. The default criteria are the canonical class definitions, and the instruction tells the classifier that `code_*` means the assistant is expected to change files or run commands.
+- **Skipped calls.** The provider is not called for empty prompts or Claude Code slash commands, or when no applicable rule targets a model other than the current one.
+- **Cache-aware switching** (`routing.cacheAware`, default `true`). Changing model discards the conversation's prompt cache. When a suggestion is cheaper per token but re-reading the cached context at its full input price would cost more than staying on the current model at the cached price, the router keeps the current model (`cache-sticky` in telemetry). Upgrades are never suppressed, and nothing is decided without prices for both models.
+- **Prices** (`prices.enabled`, `prices.url`). Hosts often report no price (Claude Code) or zero (subscription models in OpenCode). The router then uses the [LiteLLM price table](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json), cached trimmed in `~/.local/state/system1router/model-prices.json` and refreshed by a detached background process when older than 7 days, so a request never waits for the download. `system1router prices [--refresh]` prints what each rule target costs. For subscription plans these are API list prices, used as a proxy for relative cost.
 
 ## Provider Setup
 
@@ -92,4 +108,6 @@ For provider troubleshooting, use `/s1router_config` in the OpenCode TUI to togg
 
 Consent values are `interactive`, `always-accept`, `always-decline`, or `disabled`. Interactive one-shot hooks decline when no supported UI is available. Tests and host UIs may set `SYSTEM1ROUTER_CONSENT=accept` or `decline` for one request.
 
-The OpenCode confirmation uses `timeouts.consentMs` from the active config (JSON or TOML) for each request. It has no search field, highlights **Confirm** (use suggested) by default, shows the time available when opened, and keeps the current model when the timer expires. The default is 15,000 ms. For two minutes, add `"timeouts": { "consentMs": 120000 }` to JSON, or `consentMs = 120000` under `[timeouts]` in TOML. The allowed range is 1–86,400,000 ms. Edits to the router config take effect on the next prompt.
+In OpenCode the model dialog also offers **Always switch for this pair** and **Never switch for this pair**. The answer is remembered for that exact current → suggested model/variant pair (in `~/.local/state/system1router/consent-preferences.json`) and later identical suggestions are applied or skipped without a dialog. `/s1router_config` lists remembered choices and can forget them.
+
+The OpenCode confirmation uses `timeouts.consentMs` from the active config (JSON or TOML) for each request. It has no search field, highlights **Use suggested** by default, shows the time available when opened, and keeps the current model when the timer expires. The default is 15,000 ms. For two minutes, add `"timeouts": { "consentMs": 120000 }` to JSON, or `consentMs = 120000` under `[timeouts]` in TOML. The allowed range is 1–86,400,000 ms. Edits to the router config take effect on the next prompt.

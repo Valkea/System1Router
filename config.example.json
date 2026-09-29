@@ -3,7 +3,9 @@
     "enabled": false,
     "defaultMode": "advisory",
     "failOpen": true,
-    "minConfidence": 0.0
+    "minConfidence": 0.0,
+    "classSelection": "median",
+    "cacheAware": true
   },
   "providers": {
     "selected": "none",
@@ -13,15 +15,25 @@
       "model": "jev-latest",
       "stateTemplate": "Project and conversation context: {context}\n\nCurrent request: {query}"
     },
-    "laya": { "command": "laya-router-worker", "baseUrl": "http://127.0.0.1:8788/classify" }
+    "laya": {
+      "command": "laya-router-worker",
+      "baseUrl": "http://127.0.0.1:8788/classify"
+    }
   },
   "redaction": {
     "maxQueryChars": 4000,
     "maxContextChars": 4000,
-    "patterns": ["internal-secret-"]
+    "patterns": [
+      "internal-secret-"
+    ]
   },
-  "consent": { "mode": "interactive", "declineOnTimeout": true },
-  "timeouts": { "consentMs": 120000 },
+  "consent": {
+    "mode": "interactive",
+    "declineOnTimeout": true
+  },
+  "timeouts": {
+    "consentMs": 120000
+  },
   "gateway": {
     "enabled": false,
     "bind": "127.0.0.1:8765",
@@ -44,6 +56,31 @@
         "variant": "high"
       },
       "reason": "Use the high-reasoning variant for complex code work"
+    },
+    {
+      "id": "claude-code-hard",
+      "host": "claude-code",
+      "priority": 10,
+      "routingClass": "code_hard",
+      "target": {
+        "provider": "anthropic",
+        "model": "opus"
+      },
+      "reason": "Complex or high-risk change"
+    },
+    {
+      "id": "claude-code-simple",
+      "host": "claude-code",
+      "priority": 10,
+      "routingClass": "question_simple",
+      "target": {
+        "provider": "anthropic",
+        "model": "haiku"
+      },
+      "reason": "Short direct question"
     }
-  ]
+  ],
+  "prices": {
+    "enabled": true
+  }
 }

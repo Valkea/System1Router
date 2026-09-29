@@ -91,13 +91,16 @@ The worker receives the same bounded decision request as Jev and returns the nor
 
 ## Install Host Hooks
 
-Install the OpenCode server and TUI plugins interactively:
+Install for the coding assistants found on this machine:
 
 ```sh
 system1router install
 ```
 
-Choose **This project only** to install under `.opencode/`, or **All projects for this user** to install under `~/.config/opencode/` (or `$XDG_CONFIG_HOME/opencode/`). For scripts, pass `--scope project` or `--scope global`. `system1router uninstall --host opencode --scope <scope>` removes only files created by this installer. If a project already includes the System1Router plugin, it is already installed locally; the global option warns about loading both copies in that project.
+The installer lists the detected assistants (OpenCode, Claude Code) and asks which to install for, then asks for **This project only** or **All projects for this user**. For scripts, pass `--host opencode|claude-code|all` and `--scope project|global`.
+
+- **OpenCode**: server and TUI plugins under `.opencode/` or `~/.config/opencode/`. Routing switches the model of the request itself after you confirm.
+- **Claude Code**: a `UserPromptSubmit` hook in `.claude/settings.local.json` or `~/.claude/settings.json`. Claude Code cannot switch models from a hook, so the suggestion and its `/model` command are shown above the reply. Add rules with `"host": "claude-code"` and Anthropic targets (`opus`, `sonnet`, `haiku`). `system1router uninstall --host opencode --scope <scope>` removes only files created by this installer. If a project already includes the System1Router plugin, it is already installed locally; the global option warns about loading both copies in that project.
 
 Use `system1router update` to check crates.io for a newer published version and install it. `system1router update --check` only checks. The package must be published to crates.io for remote updates to be available; when run from the source checkout, `update` installs that checkout.
 
@@ -121,7 +124,7 @@ Use `--host-config /path/to/host-config.json` for a test or non-default host con
 
 OpenCode offers three router commands: `/s1router_toogle` (also accepts `/s1router_toggle`) flips routing on/off; `/s1router_config` opens the menu to toggle routing and verbose traces or copy the config and provider-log paths; `/s1router_stats` shows calls by model and the share of answered suggestions accepted. The config file must exist to use the toggle. Routing status is prepended to the prompt as a compact S1R/class/model/variant block and is excluded from model context. Classification receives the current prompt unchanged plus recent conversation text, tool results/usage, and file references. This context is redacted and bounded by `redaction.maxContextChars` (4,000 characters by default). In verbose mode, expand the native Thought section to inspect the router input and redacted System One request/response. These trace parts are excluded from model context. Provider exchanges are stored in `~/.local/state/system1router/provider-debug.jsonl` (or `$XDG_STATE_HOME/system1router/provider-debug.jsonl`). Usage stats are stored locally in `usage.jsonl` alongside the core's `events.jsonl`; disabling telemetry disables new stats. The native executable reads config and `.env` for every request; changes to plugin files need an OpenCode restart.
 
-The model confirmation shows the routing category, has no search field, and selects **Use suggested** by default. Move between **Use suggested** and **Keep current** to reset the live countdown; Enter selects, and Escape keeps the current model. Set `timeouts.consentMs` in the active router config to change the countdown duration (e.g. `120000` for two minutes). Expiry keeps the current model.
+The model confirmation shows the routing category, has no search field, and selects **Use suggested** by default. **Always switch** / **Never switch for this pair** remember the answer for that current → suggested pair so the dialog is not shown again for it; `/s1router_config` lists and forgets remembered choices. Move between **Use suggested** and **Keep current** to reset the live countdown; Enter selects, and Escape keeps the current model. Set `timeouts.consentMs` in the active router config to change the countdown duration (e.g. `120000` for two minutes). Expiry keeps the current model.
 
 Smoke-test the normalized protocol without intercepting a real client:
 
@@ -137,6 +140,7 @@ system1router --help
 system1router install --scope global
 system1router update --check
 system1router doctor --config ~/.config/system1router/config.json
+system1router prices --refresh
 system1router init --host claude-code
 system1router uninstall --host claude-code
 system1router hook --host codex < event.json
