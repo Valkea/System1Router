@@ -48,10 +48,13 @@ fn redact_value(value: &Value, config: &RedactionConfig) -> Value {
 }
 
 pub fn project_event(event: &NormalizedEvent, config: &RedactionConfig) -> ProviderInput {
-    let context = event.context.clone();
+    let mut context = event.context.clone();
+    // A token count is not a secret, but its key would match the "token" pattern.
+    let context_tokens = context.context_tokens.take();
     let context_json = serde_json::to_value(context).unwrap_or(Value::Null);
     let context_json = redact_value(&context_json, config);
     let mut context: BoundedContext = serde_json::from_value(context_json).unwrap_or_default();
+    context.context_tokens = context_tokens;
     // Apply a shared budget across fields, including metadata and file lists.
     let mut remaining = config.max_context_chars;
     for field in [&mut context.conversation_summary, &mut context.project_summary, &mut context.project_id,
@@ -124,5 +127,14 @@ mod tests {
         assert_eq!(result.correlation_id, "same-request");
         assert_eq!(result.context.project_summary.as_deref(), Some("xxxxxxxxxx"));
         assert!(result.context.files.is_empty());
+    }
+    #[test]
+    fn context_token_counts_do_not_wipe_the_context() {
+        let mut event = crate::adapters::normalize(crate::adapters::Host::Generic, serde_json::json!({ "prompt": "hello" }), None);
+        event.context.conversation_summary = Some("earlier turn".into());
+        event.context.context_tokens = Some(42_000);
+        let result = project_event(&event, &RedactionConfig::default());
+        assert_eq!(result.context.conversation_summary.as_deref(), Some("earlier turn"));
+        assert_eq!(result.context.context_tokens, Some(42_000));
     }
 }
