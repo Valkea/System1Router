@@ -7,6 +7,7 @@ pub mod config;
 pub mod gateway;
 pub mod host_install;
 pub mod policy;
+pub mod prices;
 pub mod protocol;
 pub mod redaction;
 pub mod runtime;

@@ -1,4 +1,4 @@
-use crate::{config::{Config, PolicyRule}, protocol::{CapabilityLevel, ModelCatalog, NormalizedEvent, PolicyTarget, Recommendation, RoutingClassification, RoutingMode}};
+use crate::{config::{Config, PolicyRule}, protocol::{CapabilityLevel, ModelCatalog, ModelCost, NormalizedEvent, PolicyTarget, Recommendation, RoutingClassification, RoutingMode}};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PolicyResolution { Recommendation(Recommendation), Bypass(String), Unavailable(String) }
@@ -56,13 +56,14 @@ fn usable_without_catalog(target: &PolicyTarget, event: &NormalizedEvent) -> boo
 /// the current model would read it at the cached price. Only downgrades are
 /// suppressed: upgrades are about quality, and unknown (zero) prices are
 /// never guessed.
-pub fn switch_discards_cache_savings(recommendation: &Recommendation, event: &NormalizedEvent) -> Option<String> {
+pub fn switch_discards_cache_savings(recommendation: &Recommendation, event: &NormalizedEvent, fallback: &dyn Fn(&str, &str) -> Option<ModelCost>) -> Option<String> {
     let tokens = event.context.context_tokens.filter(|tokens| *tokens > 0)? as f64;
     let current = event.current_model.as_ref()?;
     let provider = recommendation.provider.as_deref()?;
     let model = recommendation.model.as_deref()?;
     if current.provider == provider && current.model == model { return None; }
-    let price = |provider: &str, model: &str| event.catalog.models.iter().find(|item| item.provider == provider && item.model == model).and_then(|item| item.cost.clone()).filter(|cost| cost.input > 0.0);
+    let price = |provider: &str, model: &str| event.catalog.models.iter().find(|item| item.provider == provider && item.model == model).and_then(|item| item.cost.clone()).filter(|cost| cost.input > 0.0)
+        .or_else(|| fallback(provider, model).filter(|cost| cost.input > 0.0));
     let current_cost = price(&current.provider, &current.model)?;
     let suggested_cost = price(provider, model)?;
     if suggested_cost.input >= current_cost.input { return None; }
@@ -183,13 +184,14 @@ mod tests {
         event.current_model = Some(ModelState { provider: "p".into(), model: "big".into(), variant: None, scope: None });
         event.context.context_tokens = Some(100_000);
         let rec = |model: &str| Recommendation { rule_id: "r".into(), mode: RoutingMode::FullOverride, provider: Some("p".into()), model: Some(model.into()), variant: None, gateway_target: None, reason: String::new(), routing_class: RoutingClass::CodeSimple, task_type: "t".into(), confidence: ClassificationConfidence { routing_class: 1.0, task_type: 1.0, context: 1.0 } };
-        assert!(switch_discards_cache_savings(&rec("small"), &event).is_some(), "1.0/M uncached costs more than 0.5/M cached");
-        assert!(switch_discards_cache_savings(&rec("free"), &event).is_none(), "unknown prices are never guessed");
+        assert!(switch_discards_cache_savings(&rec("small"), &event, &|_, _| None).is_some(), "1.0/M uncached costs more than 0.5/M cached");
+        assert!(switch_discards_cache_savings(&rec("free"), &event, &|_, _| None).is_none(), "unknown prices are never guessed");
+        assert!(switch_discards_cache_savings(&rec("free"), &event, &|_, model| (model == "free").then(|| ModelCost { input: 2.0, output: 0.0, cache_read: 0.2 })).is_some(), "fallback prices fill host zeros");
         event.context.context_tokens = Some(0);
-        assert!(switch_discards_cache_savings(&rec("small"), &event).is_none(), "a fresh conversation has no cache to lose");
+        assert!(switch_discards_cache_savings(&rec("small"), &event, &|_, _| None).is_none(), "a fresh conversation has no cache to lose");
         event.context.context_tokens = Some(100_000);
         event.current_model.as_mut().unwrap().model = "small".into();
-        assert!(switch_discards_cache_savings(&rec("big"), &event).is_none(), "upgrades are never suppressed");
+        assert!(switch_discards_cache_savings(&rec("big"), &event, &|_, _| None).is_none(), "upgrades are never suppressed");
     }
     #[test] fn reports_missing_catalog_target() { let (config, mut event, classification) = fixture(); event.catalog.models[0].model = "other".into(); assert!(matches!(resolve(&classification, &event, &config), PolicyResolution::Unavailable(_))); }
 }

@@ -379,7 +379,22 @@ pub fn doctor(config: &Config) -> Value {
     for rule in config.rules.iter().filter(|rule| rule.host.as_deref().is_some_and(|name| Host::parse(name).is_none())) {
         problems.push(format!("rule {} names unknown host {:?}", rule.id, rule.host.as_deref().unwrap_or_default()));
     }
-    json!({ "version": INSTALL_VERSION, "protocolVersion": PROTOCOL_VERSION, "ready": problems.is_empty(), "problems": problems, "hosts": hosts, "config": summary })
+    let mut advice: Vec<String> = Vec::new();
+    if let Some(table) = crate::prices::load() {
+        let priced: Vec<_> = config.rules.iter().filter_map(|rule| {
+            let class = rule.routing_class.clone()?;
+            let cost = crate::prices::lookup(&table, rule.target.provider.as_deref().unwrap_or_default(), rule.target.model.as_deref()?)?;
+            Some((rule, class, cost))
+        }).collect();
+        for (easy, easy_class, easy_cost) in &priced {
+            for (hard, hard_class, hard_cost) in &priced {
+                if easy_class.is_code() == hard_class.is_code() && easy_class.tier() < hard_class.tier() && easy_cost.input > hard_cost.input * 1.2 {
+                    advice.push(format!("rule {} ({easy_class}) targets a model priced ${:.2}/M input, more than rule {} ({hard_class}) at ${:.2}/M; simpler requests usually belong on the cheaper model", easy.id, easy_cost.input, hard.id, hard_cost.input));
+                }
+            }
+        }
+    }
+    json!({ "version": INSTALL_VERSION, "protocolVersion": PROTOCOL_VERSION, "ready": problems.is_empty(), "problems": problems, "advice": advice, "hosts": hosts, "config": summary })
 }
 
 fn installation_hash(host: Host, command: &str) -> String { let mut hash = 2_166_136_261_u64; for byte in format!("{}:{command}:{INSTALL_VERSION}", host.as_str()).bytes() { hash = (hash ^ u64::from(byte)).wrapping_mul(16_777_619); } format!("{hash:016x}") }

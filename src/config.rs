@@ -174,6 +174,20 @@ fn default_bind() -> String { "127.0.0.1:8765".into() }
 
 impl Default for GatewayConfig { fn default() -> Self { Self { enabled: false, bind: default_bind(), auth_token_env: None, upstream_allowlist: Vec::new(), default_upstream: None, rate_limit_per_minute: None } } }
 
+/// Fallback model prices for hosts that report none.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PricesConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_prices_url")]
+    pub url: String,
+}
+
+fn default_prices_url() -> String { crate::prices::DEFAULT_URL.into() }
+
+impl Default for PricesConfig { fn default() -> Self { Self { enabled: true, url: default_prices_url() } } }
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TelemetryConfig {
@@ -241,13 +255,15 @@ pub struct Config {
     #[serde(default)]
     pub telemetry: TelemetryConfig,
     #[serde(default)]
+    pub prices: PricesConfig,
+    #[serde(default)]
     pub rules: Vec<PolicyRule>,
     #[serde(default)]
     pub default_recommendation: DefaultRecommendation,
 }
 
 impl Default for Config {
-    fn default() -> Self { Self { providers: ProviderConfig::default(), redaction: RedactionConfig::default(), timeouts: TimeoutConfig::default(), consent: ConsentConfig::default(), routing: RoutingConfig::default(), gateway: GatewayConfig::default(), telemetry: TelemetryConfig::default(), rules: Vec::new(), default_recommendation: DefaultRecommendation::default() } }
+    fn default() -> Self { Self { providers: ProviderConfig::default(), redaction: RedactionConfig::default(), timeouts: TimeoutConfig::default(), consent: ConsentConfig::default(), routing: RoutingConfig::default(), gateway: GatewayConfig::default(), telemetry: TelemetryConfig::default(), prices: PricesConfig::default(), rules: Vec::new(), default_recommendation: DefaultRecommendation::default() } }
 }
 
 impl Config {

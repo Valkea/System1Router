@@ -25,6 +25,11 @@ fn main() {
             return;
         }
         Some("init") => { command_install(&args, true); return; }
+        Some("__refresh-prices") => {
+            let url = Config::load(None).map(|config| config.prices.url).unwrap_or_else(|_| system1router_core::prices::DEFAULT_URL.into());
+            if let Err(error) = system1router_core::prices::refresh(&url) { eprintln!("system1router: {error}"); std::process::exit(EXIT_STARTUP_FAILURE); }
+            return;
+        }
         Some("uninstall") => { command_install(&args, false); return; }
         _ => {}
     }
@@ -34,6 +39,7 @@ fn main() {
         Some("doctor") => print_json(adapters::doctor(&config)),
         Some("gateway") => command_gateway(&args, config),
         Some("benchmark") => command_benchmark(&config),
+        Some("prices") => command_prices(&args, &config),
         Some("hook") => command_hook(&args, config),
         _ => command_event(config),
     }
@@ -50,6 +56,7 @@ fn print_help() {
     println!("  doctor                                                Show host and configuration diagnostics");
     println!("  hook --host <host>                                    Process one host hook event");
     println!("  gateway                                               Start the optional routing gateway");
+    println!("  prices [--refresh]                                    Show rule target prices (LiteLLM table)");
     println!("  benchmark                                             Run a local routing benchmark");
     println!("  <no command>                                          Read a normalized event from stdin");
     println!("\nOptions: --config PATH, --version, --help");
@@ -323,6 +330,22 @@ fn command_update(args: &[String]) {
 }
 
 fn command_gateway(_args: &[String], config: Config) { let server = match GatewayServer::from_config(&config) { Ok(server) => server, Err(error) => { eprintln!("system1router: {error}"); std::process::exit(EXIT_STARTUP_FAILURE); } }; if let Err(error) = server.serve(config.clone(), build_provider(&config)) { eprintln!("system1router: {error}"); std::process::exit(EXIT_INTERNAL_ERROR); } }
+
+/// Shows what each rule target costs, refreshing the LiteLLM table on request.
+fn command_prices(args: &[String], config: &Config) {
+    use system1router_core::prices;
+    if args.iter().any(|arg| arg == "--refresh") || prices::load().is_none() {
+        match prices::refresh(&config.prices.url) { Ok(count) => eprintln!("system1router: cached prices for {count} models"), Err(error) => { eprintln!("system1router: {error}"); std::process::exit(EXIT_STARTUP_FAILURE); } }
+    }
+    let table = prices::load().unwrap_or_default();
+    let rules: Vec<Value> = config.rules.iter().map(|rule| {
+        let provider = rule.target.provider.clone().unwrap_or_default();
+        let model = rule.target.model.clone().unwrap_or_default();
+        let cost = prices::lookup(&table, &provider, &model);
+        json!({ "rule": rule.id, "routingClass": rule.routing_class, "target": format!("{provider}/{model}"), "usdPerMillion": cost.map(|cost| json!({ "input": cost.input, "cachedInput": cost.cache_read, "output": cost.output })) })
+    }).collect();
+    print_json(json!({ "source": config.prices.url, "cache": prices::cache_path(), "rules": rules }));
+}
 
 fn command_benchmark(config: &Config) { let provider = build_provider(config); let event = adapters::normalize(Host::Generic, json!({ "prompt": "benchmark", "sessionId": "benchmark", "event": "benchmark" }), None); let start = std::time::Instant::now(); for _ in 0..100 { let _ = process_event_safe(&event, config, provider.as_ref()); } print_json(json!({ "iterations": 100, "elapsedMs": start.elapsed().as_millis(), "averageMs": start.elapsed().as_secs_f64() * 1000.0 / 100.0, "provider": provider.name() })); }
 

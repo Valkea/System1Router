@@ -44,7 +44,9 @@ pub fn process_event(event: &NormalizedEvent, config: &Config, provider: &dyn De
         return base(DecisionOutcome::Bypass, Diagnostic::warning("target_unavailable", "the selected target is not available in the current catalog or gateway allowlist"), Some(&classification), recommendation.mode.clone(), "target-unavailable");
     }
     if config.routing.cache_aware {
-        if let Some(reason) = switch_discards_cache_savings(&recommendation, event) {
+        let table = fallback_prices(event, config);
+        let fallback = |provider: &str, model: &str| table.as_ref().and_then(|table| crate::prices::lookup(table, provider, model));
+        if let Some(reason) = switch_discards_cache_savings(&recommendation, event, &fallback) {
             return base(DecisionOutcome::Allow, Diagnostic::info("cache_sticky", reason), Some(&classification), recommendation.mode.clone(), "cache-sticky");
         }
     }
@@ -61,6 +63,14 @@ pub fn process_event(event: &NormalizedEvent, config: &Config, provider: &dyn De
     decision.recommendation = Some(recommendation);
     decision.consent = Some(consent);
     decision
+}
+
+/// Loads the LiteLLM price cache only when a cache-loss estimate is possible,
+/// refreshing it in the background when it is missing or old.
+fn fallback_prices(event: &NormalizedEvent, config: &Config) -> Option<crate::prices::PriceTable> {
+    if !config.prices.enabled || event.context.context_tokens.unwrap_or(0) == 0 || event.current_model.is_none() { return None; }
+    if crate::prices::is_stale() { crate::prices::refresh_in_background(); }
+    crate::prices::load()
 }
 
 pub fn process_event_safe(event: &NormalizedEvent, config: &Config, provider: &dyn DecisionProvider) -> NormalizedDecision {
