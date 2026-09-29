@@ -1,4 +1,4 @@
-use crate::{config::{Config, LayaConfig}, protocol::{ClassificationConfidence, ProviderMetadata, RoutingClass, RoutingClassification}, redaction::project_event};
+use crate::{config::{ClassSelection, Config, LayaConfig}, protocol::{ClassificationConfidence, ProviderMetadata, RoutingClass, RoutingClassification}, redaction::project_event};
 pub use crate::redaction::ProviderInput;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -238,20 +238,39 @@ fn post_json(endpoint: &str, body: &serde_json::Value, bearer: Option<&str>, tim
     response.into_json().map_err(|error| ProviderError::Malformed(format!("provider response JSON: {error}")))
 }
 
+/// Renders bounded context as compact labelled text. Empty fields are omitted,
+/// which keeps provider prompts short and avoids noise such as `null` fields.
+pub fn render_context(context: &crate::protocol::BoundedContext) -> String {
+    let mut sections = Vec::new();
+    let mut push = |label: &str, value: Option<&str>| {
+        if let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) { sections.push(format!("{label}: {value}")); }
+    };
+    push("Project", context.project_summary.as_deref());
+    push("Repository", context.repository.as_deref());
+    push("Branch", context.branch.as_deref());
+    if !context.files.is_empty() { push("Files in play", Some(&context.files.join(", "))); }
+    if !context.tools.is_empty() { push("Tools used", Some(&context.tools.join(", "))); }
+    if let Some(summary) = context.conversation_summary.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+        sections.push(format!("Recent conversation:\n{summary}"));
+    }
+    sections.join("\n")
+}
+
 fn typesafe_request(input: &ProviderInput, provider: &JevProvider) -> Value {
-    let context = serde_json::to_string(&input.context).unwrap_or_else(|_| "{}".into());
+    let context = render_context(&input.context);
     let state = render_state(provider.state_template.as_deref().unwrap_or("{context}\n\nCurrent request: {query}"), &input.query, &context);
+    let state = state.trim_start().to_string();
     let questions = provider.questions.clone().unwrap_or_else(|| json!({
             "routing_class": {
                 "type": "choice",
-                "instructions": "Choose exactly one routing class for this request.",
+                "instructions": "Classify the Current request. Use the conversation only to resolve what it refers to (for example 'do it' or 'fix that'). Choose code_* when the assistant is expected to change files or run commands, question_* when it is expected to answer.",
                 "criteria": {
-                    "question_simple": "A straightforward question that needs a short, direct answer.",
-                    "question_moderate": "A question requiring explanation, synthesis, or several reasoning steps.",
-                    "question_hard": "A difficult question requiring deep analysis or specialist reasoning.",
-                    "code_simple": "A small, localized code change or simple implementation task.",
-                    "code_moderate": "A code task spanning several files, components, or reasoning steps.",
-                    "code_hard": "A complex architecture, debugging, or high-risk code task."
+                    "question_simple": "A direct question requiring limited reasoning or context.",
+                    "question_moderate": "A question requiring multi-step reasoning or synthesis of relevant context.",
+                    "question_hard": "A question requiring deep analysis, broad context, or difficult trade-off reasoning.",
+                    "code_simple": "A small, localized, low-risk code change or implementation task.",
+                    "code_moderate": "A multi-step, multi-file, or non-trivial implementation, debugging, or refactoring task.",
+                    "code_hard": "A complex, high-risk, architectural, security, performance, or systemic debugging task."
                 }
             },
             "task_type": {
@@ -309,10 +328,14 @@ fn parse_typesafe_classification(response: &Value, correlation_id: &str) -> Resu
     let context_answer = answers.get("context").ok_or_else(|| ProviderError::Malformed("Jev response is missing context".into()))?;
     let context_score = context_answer.get("score").and_then(Value::as_f64).unwrap_or_default();
     let model = response.get("model").and_then(Value::as_str).map(str::to_owned);
+    let class_probabilities = routing_answer.get("probabilities").and_then(Value::as_object).map(|items| {
+        items.iter().filter_map(|(name, value)| Some((name.clone(), value.as_f64()? as f32))).collect()
+    });
     Ok(RoutingClassification {
         routing_class,
         task_type: task_type.into(),
         context_signals: vec![format!("context_score_{context_score}")],
+        class_probabilities,
         confidence: ClassificationConfidence {
             routing_class: answer_confidence(routing_answer),
             task_type: answer_confidence(task_answer),
@@ -327,10 +350,45 @@ fn answer_confidence(answer: &Value) -> f32 {
     answer.get("confidence").and_then(Value::as_f64).unwrap_or_default() as f32
 }
 
+/// Derives the class from a provider distribution. The six classes are two
+/// ordinal scales (question/code × simple/moderate/hard), so the kind is
+/// chosen by total probability mass and the tier by the median of that
+/// kind's distribution. Unlike argmax this does not pick "simple" when most
+/// of the mass says "moderate or harder", which is the costly error.
+pub fn select_class(mut result: RoutingClassification, selection: ClassSelection) -> RoutingClassification {
+    if selection == ClassSelection::Argmax { return result; }
+    let Some(probabilities) = &result.class_probabilities else { return result; };
+    let mut mass = [[0.0_f32; 3]; 2];
+    for (name, probability) in probabilities {
+        let Some(class) = RoutingClass::parse(name) else { continue; };
+        if probability.is_finite() && *probability > 0.0 { mass[usize::from(class.is_code())][class.tier()] += probability; }
+    }
+    let totals = [mass[0].iter().sum::<f32>(), mass[1].iter().sum::<f32>()];
+    let total = totals[0] + totals[1];
+    if total <= f32::EPSILON { return result; }
+    let code = totals[1] > totals[0] || (totals[1] == totals[0] && result.routing_class.is_code());
+    let kind = &mass[usize::from(code)];
+    let kind_total = totals[usize::from(code)];
+    let mut cumulative = 0.0;
+    let mut tier = 2;
+    for (index, value) in kind.iter().enumerate() {
+        cumulative += value;
+        if cumulative >= kind_total / 2.0 { tier = index; break; }
+    }
+    let selected = RoutingClass::from_parts(code, tier);
+    if selected != result.routing_class {
+        result.context_signals.push(format!("class_adjusted_from_{}", result.routing_class));
+        // Confidence of the adjusted class is its own probability share.
+        result.confidence.routing_class = (kind[tier] / total).clamp(0.0, 1.0);
+        result.routing_class = selected;
+    }
+    result
+}
+
 pub fn classify_event(provider: &dyn DecisionProvider, event: &crate::protocol::NormalizedEvent, config: &Config) -> Result<RoutingClassification, ProviderError> {
     let input = project_event(event, &config.redaction);
     let result = provider.classify(&input, Duration::from_millis(config.timeouts.provider_ms))?;
-    let result = validate_classification(result, &input.correlation_id)?;
+    let result = select_class(validate_classification(result, &input.correlation_id)?, config.routing.class_selection);
     if result.confidence.routing_class < config.routing.min_confidence || result.confidence.task_type < config.routing.min_confidence { return Err(ProviderError::LowConfidence); }
     Ok(result)
 }
@@ -341,7 +399,7 @@ mod tests {
     use crate::protocol::{ClassificationConfidence, ProviderMetadata, RoutingClass};
     #[test]
     fn validates_canonical_classes_and_confidence() {
-        let result = RoutingClassification { routing_class: RoutingClass::CodeHard, task_type: "code-generation".into(), context_signals: vec![], confidence: ClassificationConfidence { routing_class: 0.9, task_type: 0.8, context: 0.7 }, provider_metadata: ProviderMetadata { provider: "test".into(), version: "1".into(), model: None, latency_ms: None }, correlation_id: "old".into() };
+        let result = RoutingClassification { routing_class: RoutingClass::CodeHard, task_type: "code-generation".into(), context_signals: vec![], class_probabilities: None, confidence: ClassificationConfidence { routing_class: 0.9, task_type: 0.8, context: 0.7 }, provider_metadata: ProviderMetadata { provider: "test".into(), version: "1".into(), model: None, latency_ms: None }, correlation_id: "old".into() };
         assert_eq!(validate_classification(result, "new").unwrap().correlation_id, "new");
     }
 
@@ -359,6 +417,13 @@ mod tests {
         assert_eq!(result.routing_class, RoutingClass::CodeHard);
         assert_eq!(result.task_type, "debugging");
         assert_eq!(result.provider_metadata.model.as_deref(), Some("jev-1.13.0"));
+        assert!(result.class_probabilities.is_none());
+        let with_probabilities = json!({ "answers": {
+            "routing_class": { "choice": "code_simple", "confidence": 0.45, "probabilities": { "code_simple": 0.45, "code_moderate": 0.4, "code_hard": 0.15 } },
+            "task_type": { "choice": "debugging", "confidence": 0.8 },
+            "context": { "score": 1.0, "confidence": 0.7 } } });
+        let parsed = parse_typesafe_classification(&with_probabilities, "c").unwrap();
+        assert_eq!(parsed.class_probabilities.unwrap().get("code_moderate"), Some(&0.4));
     }
 
     #[test]
@@ -391,5 +456,46 @@ mod tests {
         };
         let state = typesafe_request(&input, &provider)["state"].as_str().unwrap().to_owned();
         assert!(state.find("earlier conversation").unwrap() < state.find("Current request: current request").unwrap());
+        assert!(!state.contains("null"), "empty context fields must not be sent: {state}");
+    }
+
+    #[test]
+    fn empty_context_sends_only_the_request() {
+        let provider = JevProvider { endpoint: "http://localhost".into(), credential_env: None, model: None, state_template: None, questions: None };
+        let input = ProviderInput { query: "commit".into(), context: Default::default(), correlation_id: "c".into() };
+        assert_eq!(typesafe_request(&input, &provider)["state"], "Current request: commit");
+    }
+
+    fn distribution(pairs: &[(&str, f32)], top: RoutingClass) -> RoutingClassification {
+        RoutingClassification {
+            routing_class: top, task_type: "analysis".into(), context_signals: vec![],
+            class_probabilities: Some(pairs.iter().map(|(name, value)| (name.to_string(), *value)).collect()),
+            confidence: ClassificationConfidence { routing_class: 0.45, task_type: 0.9, context: 0.9 },
+            provider_metadata: ProviderMetadata { provider: "jev".into(), version: "1".into(), model: None, latency_ms: None },
+            correlation_id: "c".into(),
+        }
+    }
+
+    #[test]
+    fn median_tier_corrects_an_underpowered_argmax() {
+        let result = select_class(distribution(&[("code_simple", 0.45), ("code_moderate", 0.35), ("code_hard", 0.20)], RoutingClass::CodeSimple), ClassSelection::Median);
+        assert_eq!(result.routing_class, RoutingClass::CodeModerate);
+        assert!((result.confidence.routing_class - 0.35).abs() < 1e-6);
+        assert!(result.context_signals.contains(&"class_adjusted_from_code_simple".to_string()));
+    }
+
+    #[test]
+    fn kind_uses_total_mass() {
+        let result = select_class(distribution(&[("question_simple", 0.40), ("code_simple", 0.35), ("code_moderate", 0.25)], RoutingClass::QuestionSimple), ClassSelection::Median);
+        assert_eq!(result.routing_class, RoutingClass::CodeSimple);
+    }
+
+    #[test]
+    fn confident_argmax_and_argmax_mode_are_unchanged() {
+        let confident = select_class(distribution(&[("question_simple", 0.99), ("code_simple", 0.01)], RoutingClass::QuestionSimple), ClassSelection::Median);
+        assert_eq!(confident.routing_class, RoutingClass::QuestionSimple);
+        assert!((confident.confidence.routing_class - 0.45).abs() < 1e-6);
+        let argmax = select_class(distribution(&[("code_simple", 0.45), ("code_moderate", 0.35), ("code_hard", 0.20)], RoutingClass::CodeSimple), ClassSelection::Argmax);
+        assert_eq!(argmax.routing_class, RoutingClass::CodeSimple);
     }
 }

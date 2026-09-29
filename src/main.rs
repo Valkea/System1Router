@@ -43,7 +43,7 @@ fn print_help() {
     println!("system1router {}", env!("CARGO_PKG_VERSION"));
     println!("\nUsage: system1router <command> [options]\n");
     println!("Commands:");
-    println!("  install [--scope project|global] [--project-dir PATH]  Install the OpenCode plugins");
+    println!("  install [--host H|all] [--scope project|global]       Install for detected assistants (OpenCode, Claude Code)");
     println!("  update [--check]                                      Check for and install updates");
     println!("  init --host <host>                                    Install a host hook or OpenCode plugin");
     println!("  uninstall --host <host> [--scope project|global]      Remove an installation");
@@ -56,8 +56,12 @@ fn print_help() {
 }
 
 fn print_install_help() {
-    println!("Usage: system1router install [--scope project|global] [--project-dir PATH]");
-    println!("\nInstalls the OpenCode server and TUI plugins. Without --scope, an interactive menu asks whether to install for the current project or all projects for this user.");
+    println!("Usage: system1router install [--host opencode|claude-code|all] [--scope project|global] [--project-dir PATH] [--executable PATH]");
+    println!("\nDetects the installed coding assistants and installs System1Router for them:");
+    println!("  OpenCode     server + TUI plugins (per-request model switch with a confirmation dialog)");
+    println!("  Claude Code  UserPromptSubmit hook in settings.json (project: .claude/settings.local.json);");
+    println!("               advisory: shows the suggested model and the /model command");
+    println!("\nWithout --host, a menu lists detected assistants; without --scope, a menu asks for project or global.");
 }
 
 fn print_update_help() {
@@ -76,11 +80,49 @@ fn parse_opencode_scope(value: &str) -> Option<OpenCodeScope> {
     match value { "project" | "local" => Some(OpenCodeScope::Project), "global" | "user" => Some(OpenCodeScope::Global), _ => None }
 }
 
+fn interactive() -> bool { io::stdin().is_terminal() && io::stdout().is_terminal() }
+
+fn prompt_line(prompt: &str) -> Result<String, String> {
+    print!("{prompt}");
+    io::stdout().flush().map_err(|error| format!("write prompt: {error}"))?;
+    let mut answer = String::new();
+    io::stdin().read_line(&mut answer).map_err(|error| format!("read answer: {error}"))?;
+    Ok(answer.trim().to_string())
+}
+
+/// Hosts to install for: `--host`, else an interactive pick among detected
+/// assistants, else every detected assistant.
+fn choose_hosts(args: &[String]) -> Result<Vec<Host>, String> {
+    let detected = adapters::detect_hosts();
+    match argument(args, "--host") {
+        Some("all") => {
+            if detected.is_empty() { return Err("no supported coding assistant was detected; pass --host opencode or --host claude-code".into()); }
+            return Ok(detected.into_iter().map(|(host, _)| host).collect());
+        }
+        Some(name) => return Host::parse(name).map(|host| vec![host]).ok_or_else(|| format!("unsupported host: {name}")),
+        None => {}
+    }
+    if detected.is_empty() { return Err("no supported coding assistant was detected; pass --host opencode or --host claude-code".into()); }
+    if !interactive() || detected.len() == 1 { return Ok(detected.into_iter().map(|(host, _)| host).collect()); }
+    println!("Detected coding assistants:");
+    for (index, (host, evidence)) in detected.iter().enumerate() { println!("  {}) {:<12} {evidence}", index + 1, host_label(*host)); }
+    let answer = prompt_line("Install for which? [Enter = all, e.g. 1,2, q = cancel]: ")?;
+    if answer.eq_ignore_ascii_case("q") { return Ok(Vec::new()); }
+    if answer.is_empty() || answer.eq_ignore_ascii_case("all") { return Ok(detected.into_iter().map(|(host, _)| host).collect()); }
+    answer.split([',', ' ']).filter(|item| !item.is_empty()).map(|item| {
+        item.parse::<usize>().ok().and_then(|index| detected.get(index.wrapping_sub(1))).map(|(host, _)| *host).ok_or_else(|| format!("invalid choice: {item}"))
+    }).collect()
+}
+
+fn host_label(host: Host) -> &'static str {
+    match host { Host::OpenCode => "OpenCode", Host::ClaudeCode => "Claude Code", Host::Codex => "Codex", Host::CopilotCli => "Copilot CLI", Host::CopilotVsCode => "Copilot VS Code", Host::Generic => "Generic" }
+}
+
 fn choose_opencode_scope() -> Result<Option<OpenCodeScope>, String> {
-    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+    if !interactive() {
         return Err("choose an installation scope with --scope project or --scope global".into());
     }
-    println!("Install System1Router for OpenCode:");
+    println!("Install System1Router for:");
     println!("  1) This project only");
     println!("  2) All projects for this user (global)");
     print!("Choose 1 or 2 (q to cancel): ");
@@ -96,7 +138,12 @@ fn choose_opencode_scope() -> Result<Option<OpenCodeScope>, String> {
 }
 
 fn command_opencode_install(args: &[String]) {
-    if argument(args, "--host").is_some() {
+    let hosts = match choose_hosts(args) {
+        Ok(hosts) => hosts,
+        Err(error) => { eprintln!("system1router: {error}"); std::process::exit(EXIT_STARTUP_FAILURE); }
+    };
+    if hosts.is_empty() { println!("Installation cancelled."); return; }
+    if hosts.iter().any(|host| !matches!(host, Host::OpenCode | Host::ClaudeCode)) {
         command_install(args, true);
         return;
     }
@@ -114,7 +161,42 @@ fn command_opencode_install(args: &[String]) {
     let directory = argument(args, "--project-dir").map(PathBuf::from);
     let current = env::current_dir().ok();
     let project_dir = directory.as_deref().or(current.as_deref());
-    print_result(adapters::install_opencode(scope, project_dir));
+    let executable = argument(args, "--executable");
+    let mut results = Vec::new();
+    let mut failed = false;
+    for host in hosts {
+        let result = match host {
+            Host::ClaudeCode => adapters::install_claude_code(scope, project_dir, executable),
+            _ => adapters::install_opencode(scope, project_dir),
+        };
+        match result {
+            Ok(value) => results.push(value),
+            Err(error) => { failed = true; results.push(json!({ "host": host.as_str(), "status": "failed", "error": error })); }
+        }
+    }
+    report_installs(&results);
+    if failed { std::process::exit(EXIT_STARTUP_FAILURE); }
+}
+
+fn report_installs(results: &[Value]) {
+    if !io::stdout().is_terminal() {
+        if let [single] = results { print_json(single); } else { print_json(json!({ "installs": results })); }
+        return;
+    }
+    for result in results {
+        let host = result["host"].as_str().unwrap_or("host");
+        let status = result["status"].as_str().unwrap_or("done");
+        let target = result.get("path").and_then(Value::as_str).unwrap_or_default();
+        match result.get("error").and_then(Value::as_str) {
+            Some(error) => println!("✗ {host}: {error}"),
+            None => println!("✓ {host}: {status} {target}"),
+        }
+        if let Some(warning) = result.get("warning").and_then(Value::as_str) { println!("  ! {warning}"); }
+    }
+    println!("\nNext steps:");
+    if results.iter().any(|result| result["host"] == "opencode") { println!("  • OpenCode: restart it; use /s1router_config to toggle routing."); }
+    if results.iter().any(|result| result["host"] == "claude-code") { println!("  • Claude Code: add rules with \"host\": \"claude-code\" (targets such as opus, sonnet, haiku); the suggestion appears above each reply."); }
+    println!("  • Run `system1router doctor` to check the provider and rules.");
 }
 
 fn command_install(args: &[String], install: bool) {
@@ -137,9 +219,12 @@ fn command_install(args: &[String], install: bool) {
     let result = if host == Host::OpenCode {
         let scope = scope.unwrap_or(OpenCodeScope::Global);
         if install { adapters::install_opencode(scope, project_dir) } else { adapters::uninstall_opencode(scope, project_dir) }
+    } else if host == Host::ClaudeCode && path.is_none() {
+        let scope = scope.unwrap_or(OpenCodeScope::Global);
+        if install { adapters::install_claude_code(scope, project_dir, argument(args, "--executable")) } else { adapters::uninstall_claude_code(scope, project_dir) }
     } else {
         if scope.is_some() || argument(args, "--project-dir").is_some() {
-            eprintln!("system1router: --scope and --project-dir apply only to OpenCode");
+            eprintln!("system1router: --scope and --project-dir apply only to OpenCode and Claude Code");
             std::process::exit(EXIT_STARTUP_FAILURE);
         }
         if install { adapters::install(host, path.as_deref(), argument(args, "--executable")) } else { adapters::uninstall(host, path.as_deref()) }
@@ -241,7 +326,25 @@ fn command_gateway(_args: &[String], config: Config) { let server = match Gatewa
 
 fn command_benchmark(config: &Config) { let provider = build_provider(config); let event = adapters::normalize(Host::Generic, json!({ "prompt": "benchmark", "sessionId": "benchmark", "event": "benchmark" }), None); let start = std::time::Instant::now(); for _ in 0..100 { let _ = process_event_safe(&event, config, provider.as_ref()); } print_json(json!({ "iterations": 100, "elapsedMs": start.elapsed().as_millis(), "averageMs": start.elapsed().as_secs_f64() * 1000.0 / 100.0, "provider": provider.name() })); }
 
-fn command_hook(args: &[String], config: Config) { let host_name = argument(args, "--host").unwrap_or("generic"); let Some(host) = Host::parse(host_name) else { eprintln!("unsupported host: {host_name}"); std::process::exit(EXIT_STARTUP_FAILURE); }; let (payload, timed_out) = read_stdin(config.timeouts.hook_ms); if timed_out { let decision = bypass("timeout", "hook input timed out", "unknown".into()); print_json(adapters::translate_decision(host, &decision)); std::process::exit(EXIT_TIMEOUT); } let payload: Value = match serde_json::from_slice(&payload) { Ok(payload) => payload, Err(error) => { eprintln!("system1router: malformed hook input: {error}"); let decision = bypass("malformed_event", "hook input was not valid JSON", "unknown".into()); print_json(adapters::translate_decision(host, &decision)); std::process::exit(EXIT_MALFORMED_EVENT); } }; let event = adapters::normalize(host, payload, env::current_dir().ok().and_then(|path| path.to_str().map(str::to_owned))); let provider = build_provider(&config); let decision = process_event_safe(&event, &config, provider.as_ref()); record_decision(&decision, &event, &config); let exit = if decision.diagnostic.code == "unsupported_version" { EXIT_UNSUPPORTED_VERSION } else if decision.diagnostic.code == "internal_error" { EXIT_INTERNAL_ERROR } else { 0 }; print_json(adapters::translate_decision(host, &decision)); if exit != 0 { std::process::exit(exit); } }
+fn command_hook(args: &[String], config: Config) {
+    let host_name = argument(args, "--host").unwrap_or("generic");
+    let Some(host) = Host::parse(host_name) else { eprintln!("unsupported host: {host_name}"); std::process::exit(EXIT_STARTUP_FAILURE); };
+    // Claude Code reports any non-zero exit as a hook error; routing failures are fail-open, so exit cleanly.
+    let exit_with = |code: i32| if host == Host::ClaudeCode { 0 } else { code };
+    let (payload, timed_out) = read_stdin(config.timeouts.hook_ms);
+    if timed_out { let decision = bypass("timeout", "hook input timed out", "unknown".into()); print_json(adapters::translate_decision(host, &decision)); std::process::exit(exit_with(EXIT_TIMEOUT)); }
+    let payload: Value = match serde_json::from_slice(&payload) {
+        Ok(payload) => payload,
+        Err(error) => { eprintln!("system1router: malformed hook input: {error}"); let decision = bypass("malformed_event", "hook input was not valid JSON", "unknown".into()); print_json(adapters::translate_decision(host, &decision)); std::process::exit(exit_with(EXIT_MALFORMED_EVENT)); }
+    };
+    let event = adapters::normalize(host, payload, env::current_dir().ok().and_then(|path| path.to_str().map(str::to_owned)));
+    let provider = build_provider(&config);
+    let decision = process_event_safe(&event, &config, provider.as_ref());
+    record_decision(&decision, &event, &config);
+    let exit = if decision.diagnostic.code == "unsupported_version" { EXIT_UNSUPPORTED_VERSION } else if decision.diagnostic.code == "internal_error" { EXIT_INTERNAL_ERROR } else { 0 };
+    print_json(adapters::translate_hook_decision(host, &decision, &event));
+    if exit_with(exit) != 0 { std::process::exit(exit); }
+}
 
 fn command_event(config: Config) { let (bytes, timed_out) = read_stdin(config.timeouts.hook_ms); if timed_out { print_json(bypass("timeout", "event input timed out", "unknown".into())); std::process::exit(EXIT_TIMEOUT); } let event: system1router_core::protocol::NormalizedEvent = match serde_json::from_slice(&bytes) { Ok(event) => event, Err(error) => { eprintln!("system1router: malformed event: {error}"); print_json(bypass("malformed_event", "event was not valid normalized JSON", "unknown".into())); std::process::exit(EXIT_MALFORMED_EVENT); } }; let provider = build_provider(&config); let decision = process_event_safe(&event, &config, provider.as_ref()); record_decision(&decision, &event, &config); let exit = if decision.diagnostic.code == "unsupported_version" { EXIT_UNSUPPORTED_VERSION } else if decision.diagnostic.code == "internal_error" { EXIT_INTERNAL_ERROR } else { 0 }; print_json(serde_json::to_value(decision).unwrap_or_else(|_| json!({ "outcome": "bypass" }))); if exit != 0 { std::process::exit(exit); } }
 

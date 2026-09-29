@@ -17,7 +17,7 @@ const OPENCODE_TUI_SPEC: &str = "./system1router-tui.ts";
 pub enum OpenCodeScope { Project, Global }
 
 impl OpenCodeScope {
-    fn as_str(self) -> &'static str { match self { Self::Project => "project", Self::Global => "global" } }
+    pub fn as_str(self) -> &'static str { match self { Self::Project => "project", Self::Global => "global" } }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -70,11 +70,56 @@ pub fn default_config_path(host: Host) -> PathBuf {
         return if !json.exists() && root.join("opencode.jsonc").exists() { root.join("opencode.jsonc") } else { json };
     }
     let home = env::var("HOME").or_else(|_| env::var("USERPROFILE")).unwrap_or_else(|_| ".".into());
-    match host { Host::ClaudeCode => PathBuf::from(home).join(".claude/settings.json"), Host::Codex => PathBuf::from(home).join(".codex/config.json"), Host::CopilotCli => PathBuf::from(home).join(".config/github-copilot/hooks.json"), Host::CopilotVsCode => PathBuf::from(home).join(".config/system1router/copilot-vscode.json"), Host::OpenCode => unreachable!(), Host::Generic => PathBuf::from(home).join(".config/system1router/generic-hook.json") }
+    match host { Host::ClaudeCode => crate::claude_code::settings_path(true, Path::new(".")), Host::Codex => PathBuf::from(home).join(".codex/config.json"), Host::CopilotCli => PathBuf::from(home).join(".config/github-copilot/hooks.json"), Host::CopilotVsCode => PathBuf::from(home).join(".config/system1router/copilot-vscode.json"), Host::OpenCode => unreachable!(), Host::Generic => PathBuf::from(home).join(".config/system1router/generic-hook.json") }
+}
+
+/// Absolute path of the running executable, so hooks keep working when the
+/// host is started without Cargo's bin directory on PATH.
+pub fn default_executable() -> String {
+    env::current_exe().ok().and_then(|path| path.canonicalize().ok()).and_then(|path| path.to_str().map(str::to_owned)).unwrap_or_else(|| "system1router".into())
+}
+
+fn on_path(name: &str) -> Option<PathBuf> {
+    let names: Vec<String> = if cfg!(windows) { vec![format!("{name}.exe"), format!("{name}.cmd"), name.into()] } else { vec![name.into()] };
+    env::split_paths(&env::var_os("PATH")?).flat_map(|directory| names.iter().map(move |name| directory.join(name))).find(|path| path.is_file())
+}
+
+/// Coding assistants present on this machine, with the evidence found.
+pub fn detect_hosts() -> Vec<(Host, String)> {
+    let mut hosts = Vec::new();
+    if let Some(path) = on_path("opencode") { hosts.push((Host::OpenCode, path.display().to_string())); }
+    else if opencode_config_dir().is_dir() { hosts.push((Host::OpenCode, opencode_config_dir().display().to_string())); }
+    let claude_dir = crate::claude_code::settings_path(true, Path::new(".")).parent().map(Path::to_path_buf).unwrap_or_default();
+    if let Some(path) = on_path("claude") { hosts.push((Host::ClaudeCode, path.display().to_string())); }
+    else if claude_dir.is_dir() { hosts.push((Host::ClaudeCode, claude_dir.display().to_string())); }
+    hosts
+}
+
+fn project_directory(project_dir: Option<&Path>) -> Result<PathBuf, String> {
+    let start = match project_dir { Some(path) => path.to_path_buf(), None => env::current_dir().map_err(|error| format!("read current directory: {error}"))? };
+    Ok(project_root(&start))
+}
+
+pub fn install_claude_code(scope: OpenCodeScope, project_dir: Option<&Path>, executable: Option<&str>) -> Result<Value, String> {
+    let path = crate::claude_code::settings_path(scope == OpenCodeScope::Global, &project_directory(project_dir)?);
+    let mut result = crate::claude_code::install(&path, &executable.map(str::to_owned).unwrap_or_else(default_executable))?;
+    result["scope"] = json!(scope.as_str());
+    Ok(result)
+}
+
+pub fn uninstall_claude_code(scope: OpenCodeScope, project_dir: Option<&Path>) -> Result<Value, String> {
+    let path = crate::claude_code::settings_path(scope == OpenCodeScope::Global, &project_directory(project_dir)?);
+    let mut result = crate::claude_code::uninstall(&path)?;
+    result["scope"] = json!(scope.as_str());
+    Ok(result)
 }
 
 pub fn install(host: Host, config_path: Option<&Path>, executable: Option<&str>) -> Result<Value, String> {
     if host == Host::OpenCode { return install_opencode(OpenCodeScope::Global, None); }
+    if host == Host::ClaudeCode {
+        let path = config_path.map(PathBuf::from).unwrap_or_else(|| default_config_path(host));
+        return crate::claude_code::install(&path, &executable.map(str::to_owned).unwrap_or_else(default_executable));
+    }
     let path = config_path.map(PathBuf::from).unwrap_or_else(|| default_config_path(host));
     let mut root: Value = if path.exists() { serde_json::from_str(&fs::read_to_string(&path).map_err(|e| format!("read host config: {e}"))?).map_err(|e| format!("parse host config: {e}"))? } else { json!({}) };
     let command = executable.unwrap_or("system1router");
@@ -93,6 +138,7 @@ pub fn install_opencode(scope: OpenCodeScope, project_dir: Option<&Path>) -> Res
 
 pub fn uninstall(host: Host, config_path: Option<&Path>) -> Result<Value, String> {
     if host == Host::OpenCode { return uninstall_opencode(OpenCodeScope::Global, None); }
+    if host == Host::ClaudeCode { return crate::claude_code::uninstall(&config_path.map(PathBuf::from).unwrap_or_else(|| default_config_path(host))); }
     let path = config_path.map(PathBuf::from).unwrap_or_else(|| default_config_path(host));
     if !path.exists() { return Ok(json!({ "host": host.as_str(), "status": "not-installed", "path": path })); }
     let mut root: Value = serde_json::from_str(&fs::read_to_string(&path).map_err(|e| format!("read host config: {e}"))?).map_err(|e| format!("parse host config: {e}"))?;
@@ -323,6 +369,10 @@ pub fn doctor(config: &Config) -> Value {
 fn installation_hash(host: Host, command: &str) -> String { let mut hash = 2_166_136_261_u64; for byte in format!("{}:{command}:{INSTALL_VERSION}", host.as_str()).bytes() { hash = (hash ^ u64::from(byte)).wrapping_mul(16_777_619); } format!("{hash:016x}") }
 fn is_owned_installation(path: &Path) -> bool { let Ok(contents) = fs::read_to_string(path) else { return false; }; let Ok(value) = serde_json::from_str::<Value>(&contents) else { return false; }; contents.contains(OWNER_KEY) || value.get(OWNER_KEY).is_some() }
 fn host_installation_present(host: Host) -> bool {
+    if host == Host::ClaudeCode {
+        let project = env::current_dir().ok().map(|directory| crate::claude_code::settings_path(false, &project_root(&directory)));
+        return [Some(default_config_path(host)), project].into_iter().flatten().any(|path| crate::claude_code::is_installed(&path));
+    }
     if host != Host::OpenCode { return is_owned_installation(&default_config_path(host)); }
     let global = opencode_config_dir();
     let project = env::current_dir().ok().map(|directory| project_root(&directory).join(".opencode"));
@@ -336,7 +386,7 @@ fn write_json(path: &Path, value: &Value) -> Result<(), String> { if let Some(pa
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test] fn installation_is_idempotent_and_preserves_fields() { let directory = tempfile::tempdir().unwrap(); let path = directory.path().join("settings.json"); fs::write(&path, r#"{"other":true}"#).unwrap(); install(Host::ClaudeCode, Some(&path), Some("router")).unwrap(); install(Host::ClaudeCode, Some(&path), Some("router")).unwrap(); let value: Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap(); assert_eq!(value["other"], true); assert_eq!(value["hooks"]["UserPromptSubmit"].as_array().unwrap().len(), 1); }
+    #[test] fn installation_is_idempotent_and_preserves_fields() { let directory = tempfile::tempdir().unwrap(); let path = directory.path().join("settings.json"); fs::write(&path, r#"{"other":true}"#).unwrap(); install(Host::ClaudeCode, Some(&path), Some("system1router")).unwrap(); install(Host::ClaudeCode, Some(&path), Some("system1router")).unwrap(); let value: Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap(); assert_eq!(value["other"], true); assert_eq!(value["hooks"]["UserPromptSubmit"].as_array().unwrap().len(), 1); assert!(!value.to_string().contains(OWNER_KEY)); }
 
     #[test]
     fn opencode_global_install_is_repeatable_and_preserves_existing_tui_settings() {

@@ -1,6 +1,7 @@
 //! Shared routing core for the `system1router` executable and host adapters.
 
 pub mod adapters;
+pub mod claude_code;
 pub mod classification;
 pub mod config;
 pub mod gateway;

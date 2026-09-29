@@ -70,6 +70,30 @@ impl RoutingClass {
             Self::CodeHard => "code_hard",
         }
     }
+
+    pub fn is_code(&self) -> bool { matches!(self, Self::CodeSimple | Self::CodeModerate | Self::CodeHard) }
+
+    /// Difficulty tier: 0 simple, 1 moderate, 2 hard.
+    pub fn tier(&self) -> usize {
+        match self {
+            Self::QuestionSimple | Self::CodeSimple => 0,
+            Self::QuestionModerate | Self::CodeModerate => 1,
+            Self::QuestionHard | Self::CodeHard => 2,
+        }
+    }
+
+    pub fn from_parts(code: bool, tier: usize) -> Self {
+        match (code, tier) {
+            (false, 0) => Self::QuestionSimple,
+            (false, 1) => Self::QuestionModerate,
+            (false, _) => Self::QuestionHard,
+            (true, 0) => Self::CodeSimple,
+            (true, 1) => Self::CodeModerate,
+            (true, _) => Self::CodeHard,
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> { Self::ALL.into_iter().find(|class| class.as_str() == value) }
 }
 
 impl fmt::Display for RoutingClass {
@@ -96,6 +120,21 @@ pub struct ModelRef {
     pub model: String,
     #[serde(default)]
     pub variants: Vec<String>,
+    /// Per-million-token prices reported by the host. Zero or absent means unknown
+    /// (for example subscription-billed models), which disables cost reasoning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<ModelCost>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelCost {
+    #[serde(default)]
+    pub input: f64,
+    #[serde(default)]
+    pub output: f64,
+    #[serde(default)]
+    pub cache_read: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -134,6 +173,10 @@ pub struct BoundedContext {
     pub files: Vec<String>,
     #[serde(default)]
     pub tools: Vec<String>,
+    /// Tokens already in the conversation's prompt (including cached tokens),
+    /// as last reported by the host. Used to price the cache loss of a switch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_tokens: Option<u64>,
     #[serde(default)]
     pub metadata: Value,
 }
@@ -221,6 +264,10 @@ pub struct RoutingClassification {
     pub task_type: String,
     #[serde(default)]
     pub context_signals: Vec<String>,
+    /// Optional provider distribution over the six classes. When present, the
+    /// router derives the class from it instead of trusting the argmax.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub class_probabilities: Option<std::collections::BTreeMap<String, f32>>,
     pub confidence: ClassificationConfidence,
     pub provider_metadata: ProviderMetadata,
     pub correlation_id: String,

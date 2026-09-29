@@ -1,4 +1,4 @@
-use crate::{classification::{classify_event, DecisionProvider, ProviderError}, config::{Config, ConsentMode}, policy::{resolve, target_available, PolicyResolution}, protocol::{correlation_id, supported_protocol, ConsentOutcome, DecisionOutcome, Diagnostic, NormalizedDecision, NormalizedEvent, RoutingEvent, RoutingMode}, telemetry};
+use crate::{classification::{classify_event, DecisionProvider, ProviderError}, config::{Config, ConsentMode}, policy::{alternative_possible, resolve, switch_discards_cache_savings, target_available, PolicyResolution}, protocol::{correlation_id, supported_protocol, ConsentOutcome, DecisionOutcome, Diagnostic, NormalizedDecision, NormalizedEvent, RoutingEvent, RoutingMode}, telemetry};
 use std::time::Instant;
 
 pub fn process_event(event: &NormalizedEvent, config: &Config, provider: &dyn DecisionProvider) -> NormalizedDecision {
@@ -18,6 +18,13 @@ pub fn process_event(event: &NormalizedEvent, config: &Config, provider: &dyn De
     if !config.routing.enabled {
         return base(DecisionOutcome::Bypass, Diagnostic::info("disabled", "routing is disabled"), None, RoutingMode::Advisory, "disabled");
     }
+    // Avoid paying provider latency (and sending text) when the answer cannot matter.
+    if event.request.query.trim().is_empty() {
+        return base(DecisionOutcome::Bypass, Diagnostic::info("empty_query", "the request has no text to classify"), None, RoutingMode::Advisory, "empty-query");
+    }
+    if !alternative_possible(event, config) {
+        return base(DecisionOutcome::Bypass, Diagnostic::info("no_alternative", "no applicable rule targets a model other than the current one"), None, RoutingMode::Advisory, "no-alternative");
+    }
     let mut classified_event = event.clone();
     classified_event.correlation_id = Some(id.clone());
     let classification = match classify_event(provider, &classified_event, config) {
@@ -35,6 +42,18 @@ pub fn process_event(event: &NormalizedEvent, config: &Config, provider: &dyn De
     };
     if !target_available(&recommendation, event, config) {
         return base(DecisionOutcome::Bypass, Diagnostic::warning("target_unavailable", "the selected target is not available in the current catalog or gateway allowlist"), Some(&classification), recommendation.mode.clone(), "target-unavailable");
+    }
+    if config.routing.cache_aware {
+        if let Some(reason) = switch_discards_cache_savings(&recommendation, event) {
+            return base(DecisionOutcome::Allow, Diagnostic::info("cache_sticky", reason), Some(&classification), recommendation.mode.clone(), "cache-sticky");
+        }
+    }
+    // Interactive hosts ask the user themselves; recording a guessed answer
+    // here would make every such request look declined in telemetry.
+    if config.consent.mode == ConsentMode::Interactive && event.capabilities.interactive_consent && std::env::var("SYSTEM1ROUTER_CONSENT").is_err() {
+        let mut decision = base(DecisionOutcome::Ask, Diagnostic::info("consent_requested", "the host will ask the user to choose"), Some(&classification), recommendation.mode.clone(), "consent-requested");
+        decision.recommendation = Some(recommendation);
+        return decision;
     }
     let consent = choose_consent(event, config);
     let accepted = matches!(consent, ConsentOutcome::UseSuggestedModel);

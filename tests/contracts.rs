@@ -2,7 +2,7 @@ use serde_json::json;
 use system1router_core::{adapters::{normalize, translate_claude_model_switch, translate_codex_tool_decision, translate_decision, Host}, classification::{validate_classification, StaticProvider}, config::{Config, PolicyRule}, process_event, protocol::*};
 
 fn classification(class: RoutingClass) -> RoutingClassification {
-    RoutingClassification { routing_class: class, task_type: "code-generation".into(), context_signals: vec!["project".into()], confidence: ClassificationConfidence { routing_class: 0.95, task_type: 0.9, context: 0.85 }, provider_metadata: ProviderMetadata { provider: "fixture".into(), version: "1".into(), model: Some("fixture".into()), latency_ms: Some(1) }, correlation_id: "fixture".into() }
+    RoutingClassification { routing_class: class, task_type: "code-generation".into(), context_signals: vec!["project".into()], class_probabilities: None, confidence: ClassificationConfidence { routing_class: 0.95, task_type: 0.9, context: 0.85 }, provider_metadata: ProviderMetadata { provider: "fixture".into(), version: "1".into(), model: Some("fixture".into()), latency_ms: Some(1) }, correlation_id: "fixture".into() }
 }
 
 #[test]
@@ -28,7 +28,7 @@ fn policy_and_runtime_preserve_declined_request() {
     config.consent.mode = system1router_core::config::ConsentMode::AlwaysDecline;
     config.rules.push(PolicyRule { id: "simple".into(), priority: 0, routing_class: Some(RoutingClass::CodeSimple), task_types: vec![], host: None, project_id: None, session_id: None, min_confidence: None, mode: Some(RoutingMode::Advisory), predicate: None, target: PolicyTarget { provider: Some("p".into()), model: Some("m".into()), variant: None, gateway_target: None }, reason: Some("fixture".into()) });
     let mut event = normalize(Host::Generic, json!({ "prompt": "small change", "sessionId": "s", "model": "current", "provider": "p" }), None);
-    event.catalog.models.push(ModelRef { provider: "p".into(), model: "m".into(), variants: vec![] });
+    event.catalog.models.push(ModelRef { provider: "p".into(), model: "m".into(), variants: vec![], cost: None });
     event.capabilities = CapabilityHints { level: CapabilityLevel::ConsentOnly, model_mutation: false, interactive_consent: false, gateway: false, protocol_version: Some("1".into()) };
     let provider = StaticProvider { result: Ok(classification(RoutingClass::CodeSimple)) };
     let decision = process_event(&event, &config, &provider);

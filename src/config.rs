@@ -131,9 +131,27 @@ pub struct RoutingConfig {
     pub min_confidence: f32,
     #[serde(default)]
     pub allowed_task_types: Vec<String>,
+    /// How the class is derived when the provider returns a class distribution.
+    #[serde(default)]
+    pub class_selection: ClassSelection,
+    /// Skip a downgrade that would cost more than it saves because switching
+    /// models discards the conversation's prompt cache. Needs host prices.
+    #[serde(default = "default_true")]
+    pub cache_aware: bool,
 }
 
-impl Default for RoutingConfig { fn default() -> Self { Self { enabled: false, default_mode: RoutingMode::Advisory, fail_open: true, min_confidence: 0.0, allowed_task_types: Vec::new() } } }
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum ClassSelection {
+    /// Pick code vs question by probability mass, then the median difficulty
+    /// tier. Minimises expected tier error when the provider is uncertain.
+    #[default]
+    Median,
+    /// Use the provider's top choice unchanged.
+    Argmax,
+}
+
+impl Default for RoutingConfig { fn default() -> Self { Self { enabled: false, default_mode: RoutingMode::Advisory, fail_open: true, min_confidence: 0.0, allowed_task_types: Vec::new(), class_selection: ClassSelection::default(), cache_aware: true } } }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
