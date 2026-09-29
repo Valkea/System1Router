@@ -4,6 +4,7 @@ pub mod adapters;
 pub mod claude_code;
 pub mod classification;
 pub mod config;
+pub mod control;
 pub mod gateway;
 pub mod host_install;
 pub mod policy;

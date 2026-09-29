@@ -146,6 +146,69 @@ pub fn parse_transcript(body: &str, cwd: Option<&str>) -> TranscriptContext {
     context
 }
 
+/// Router controls typed as prompts. The hook answers them itself and blocks
+/// the prompt, so they never reach (or cost) a model turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Control { Toggle(Option<bool>), Status, Stats }
+
+pub fn control_command(prompt: &str) -> Option<Control> {
+    let mut words = prompt.split_whitespace();
+    let command = words.next()?;
+    let argument = words.next();
+    match command {
+        "/s1router_toggle" | "/s1router_toogle" => Some(Control::Toggle(match argument { Some("on") => Some(true), Some("off") => Some(false), _ => None })),
+        "/s1router_config" | "/s1router_status" => Some(Control::Status),
+        "/s1router_stats" => Some(Control::Stats),
+        _ => None,
+    }
+}
+
+/// A blocked prompt shows `reason` to the user and skips the model.
+pub fn control_response(message: &str) -> Value { json!({ "decision": "block", "reason": message }) }
+
+const COMMAND_MARKER: &str = "<!-- Installed by system1router; managed file. -->";
+
+/// Slash-command files make the controls discoverable in Claude Code's `/`
+/// menu. The hook answers them first and blocks the prompt. The body must not
+/// use `!` execution: Claude Code runs that while expanding the command,
+/// before the hook, so the action would run twice. It is only an instruction
+/// for the model in case the hook is not installed.
+fn command_files(executable: &str) -> Vec<(&'static str, String)> {
+    let executable = if executable.contains(' ') { format!("\"{executable}\"") } else { executable.to_string() };
+    [
+        ("s1router_toggle.md", "Toggle System1Router routing on/off (add on or off to force)", "toggle $ARGUMENTS"),
+        ("s1router_config.md", "Show System1Router status, config and log paths", "status"),
+        ("s1router_stats.md", "Show System1Router calls per model and suggestion acceptance", "stats"),
+    ].into_iter().map(|(name, description, arguments)| {
+        let command = format!("{executable} {arguments}");
+        let allowed = format!("{executable} {}", arguments.split(' ').next().unwrap_or_default());
+        (name, format!("---\ndescription: {description}\nallowed-tools: Bash({allowed}:*)\n---\n{COMMAND_MARKER}\nRun `{command}` with the Bash tool and reply with its output only.\n"))
+    }).collect()
+}
+
+pub fn install_commands(directory: &Path, executable: &str) -> Result<usize, String> {
+    let mut written = 0;
+    for (name, contents) in command_files(executable) {
+        let path = directory.join(name);
+        if let Ok(existing) = fs::read_to_string(&path) {
+            if !existing.contains(COMMAND_MARKER) { return Err(format!("refusing to overwrite {}, which was not installed by system1router", path.display())); }
+            if existing == contents { continue; }
+        }
+        fs::create_dir_all(directory).map_err(|error| format!("create {}: {error}", directory.display()))?;
+        fs::write(&path, contents).map_err(|error| format!("write {}: {error}", path.display()))?;
+        written += 1;
+    }
+    Ok(written)
+}
+
+pub fn uninstall_commands(directory: &Path) -> usize {
+    command_files("system1router").into_iter().map(|(name, _)| directory.join(name))
+        .filter(|path| fs::read_to_string(path).is_ok_and(|text| text.contains(COMMAND_MARKER)) && fs::remove_file(path).is_ok())
+        .count()
+}
+
+pub fn commands_directory(settings: &Path) -> PathBuf { settings.parent().unwrap_or(Path::new(".")).join("commands") }
+
 /// Claude Code only accepts documented fields. A block is the only decision a
 /// prompt hook can make; advice goes to the user as a `systemMessage`.
 pub fn translate(decision: &NormalizedDecision, current: Option<&str>) -> Value {
@@ -228,6 +291,7 @@ fn is_owned(hook: &Value) -> bool {
 }
 
 pub fn install(path: &Path, executable: &str) -> Result<Value, String> {
+    install_commands(&commands_directory(path), executable)?;
     let mut root = read_settings(path)?;
     let object = root.as_object_mut().ok_or("Claude Code settings must be a JSON object")?;
     let hooks = object.entry("hooks").or_insert_with(|| json!({})).as_object_mut().ok_or("Claude Code `hooks` must be an object")?;
@@ -248,7 +312,8 @@ pub fn install(path: &Path, executable: &str) -> Result<Value, String> {
 }
 
 pub fn uninstall(path: &Path) -> Result<Value, String> {
-    if !path.exists() { return Ok(json!({ "host": "claude-code", "status": "not-installed", "path": path })); }
+    let commands = uninstall_commands(&commands_directory(path));
+    if !path.exists() && commands == 0 { return Ok(json!({ "host": "claude-code", "status": "not-installed", "path": path })); }
     let mut root = read_settings(path)?;
     let mut removed = false;
     if let Some(hooks) = root.get_mut("hooks").and_then(Value::as_object_mut) {
@@ -265,7 +330,7 @@ pub fn uninstall(path: &Path) -> Result<Value, String> {
         }
         if hooks.is_empty() { root.as_object_mut().map(|object| object.remove("hooks")); }
     }
-    if !removed { return Ok(json!({ "host": "claude-code", "status": "not-installed", "path": path })); }
+    if !removed { return Ok(json!({ "host": "claude-code", "status": if commands > 0 { "uninstalled" } else { "not-installed" }, "path": path })); }
     write_settings(path, &root)?;
     Ok(json!({ "host": "claude-code", "status": "uninstalled", "path": path }))
 }
@@ -382,6 +447,34 @@ not json
         install(&path, "system1router").unwrap();
         uninstall(&path).unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap().trim(), "{}");
+    }
+
+    #[test]
+    fn control_prompts_are_recognised() {
+        assert_eq!(control_command("/s1router_toggle"), Some(Control::Toggle(None)));
+        assert_eq!(control_command("/s1router_toogle off"), Some(Control::Toggle(Some(false))));
+        assert_eq!(control_command("  /s1router_stats "), Some(Control::Stats));
+        assert_eq!(control_command("/s1router_config"), Some(Control::Status));
+        assert_eq!(control_command("explain /s1router_toggle"), None);
+        assert_eq!(control_command("/s1router_togglex"), None);
+    }
+
+    #[test]
+    fn commands_are_installed_with_the_hook_and_removed_with_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let commands = directory.path().join("commands");
+        fs::create_dir_all(&commands).unwrap();
+        fs::write(commands.join("mine.md"), "user command").unwrap();
+        install(&path, "/opt/bin/system1router").unwrap();
+        let toggle = fs::read_to_string(commands.join("s1router_toggle.md")).unwrap();
+        assert!(toggle.starts_with("---\ndescription: Toggle System1Router"));
+        assert!(toggle.contains("allowed-tools: Bash(/opt/bin/system1router toggle:*)") && toggle.contains("Run `/opt/bin/system1router toggle $ARGUMENTS`") && !toggle.contains("!`"));
+        uninstall(&path).unwrap();
+        assert!(!commands.join("s1router_toggle.md").exists() && !commands.join("s1router_stats.md").exists());
+        assert!(commands.join("mine.md").exists());
+        fs::write(commands.join("s1router_stats.md"), "user-owned").unwrap();
+        assert!(install(&path, "system1router").is_err(), "never overwrite a user's file");
     }
 
     #[test]

@@ -100,7 +100,9 @@ system1router install
 The installer lists the detected assistants (OpenCode, Claude Code) and asks which to install for, then asks for **This project only** or **All projects for this user**. For scripts, pass `--host opencode|claude-code|all` and `--scope project|global`.
 
 - **OpenCode**: server and TUI plugins under `.opencode/` or `~/.config/opencode/`. Routing switches the model of the request itself after you confirm.
-- **Claude Code**: a `UserPromptSubmit` hook in `.claude/settings.local.json` or `~/.claude/settings.json`. Claude Code cannot switch models from a hook, so the suggestion and its `/model` command are shown above the reply. Add rules with `"host": "claude-code"` and Anthropic targets (`opus`, `sonnet`, `haiku`). `system1router uninstall --host opencode --scope <scope>` removes only files created by this installer. If a project already includes the System1Router plugin, it is already installed locally; the global option warns about loading both copies in that project.
+- **Claude Code**: a `UserPromptSubmit` hook in `.claude/settings.local.json` or `~/.claude/settings.json`. Claude Code cannot switch models from a hook, so the suggestion and its `/model` command are shown above the reply. Add rules with `"host": "claude-code"` and Anthropic targets (`opus`, `sonnet`, `haiku`). `/s1router_toggle`, `/s1router_config` and `/s1router_stats` work there too, without using a model turn.
+
+The same controls are available from any shell: `system1router toggle [on|off]`, `system1router status`, `system1router stats`. `system1router uninstall --host opencode --scope <scope>` removes only files created by this installer. If a project already includes the System1Router plugin, it is already installed locally; the global option warns about loading both copies in that project.
 
 Use `system1router update` to check crates.io for a newer published version and install it. `system1router update --check` only checks. The package must be published to crates.io for remote updates to be available; when run from the source checkout, `update` installs that checkout.
 

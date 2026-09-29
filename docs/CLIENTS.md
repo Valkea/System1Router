@@ -27,7 +27,9 @@ The installer adds a `UserPromptSubmit` command hook to `~/.claude/settings.json
 { "hooks": { "UserPromptSubmit": [ { "hooks": [ { "type": "command", "command": "/home/me/.cargo/bin/system1router hook --host claude-code", "timeout": 10 } ] } ] } }
 ```
 
-For each prompt the hook reads the tail of the session transcript for context (recent turns, tools, files), the current model and the cached context size, then classifies the prompt. When a rule suggests a different model it prints a notice such as `S1R · code_hard (80%) → opus instead of claude-sonnet-5-5. Run /model opus to switch; …`. Nothing is added to the model's context, slash commands are ignored, and any router failure exits 0 so Claude Code never reports a hook error. Rule targets can use aliases (`opus`, `sonnet`, `haiku`) or full model IDs. Verified with Claude Code 2.1.285.
+For each prompt the hook reads the tail of the session transcript for context (recent turns, tools, files), the current model and the cached context size, then classifies the prompt. When a rule suggests a different model it prints a notice such as `S1R · code_hard (80%) → opus instead of claude-sonnet-5-5. Run /model opus to switch; …`. The installer also adds `/s1router_toggle` (optionally `on`/`off`), `/s1router_config` (status, config and log paths) and `/s1router_stats` to `commands/` next to the settings file. The hook answers these itself and blocks the prompt, so they cost no model turn; the answer appears as a hook notice. The command files contain only a fallback instruction (no `!` execution, which Claude Code would run before the hook).
+
+Nothing is added to the model's context, other slash commands are ignored, and any router failure exits 0 so Claude Code never reports a hook error. Rule targets can use aliases (`opus`, `sonnet`, `haiku`) or full model IDs. Verified with Claude Code 2.1.285.
 
 Codex and Copilot installers are unchanged and unverified against current host versions.
 

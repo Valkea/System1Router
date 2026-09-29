@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{cmp::Ordering, env, io::{self, IsTerminal, Read, Write}, path::{Path, PathBuf}, process::Command, sync::mpsc, thread, time::Duration};
-use system1router_core::{adapters::{self, Host, OpenCodeScope}, classification::build_provider, config::Config, gateway::GatewayServer, protocol::{CapabilityLevel, DecisionOutcome, Diagnostic, NormalizedDecision, PROTOCOL_VERSION, EXIT_INTERNAL_ERROR, EXIT_MALFORMED_EVENT, EXIT_STARTUP_FAILURE, EXIT_TIMEOUT, EXIT_UNSUPPORTED_VERSION}, runtime::{process_event_safe, record_decision}};
+use system1router_core::{adapters::{self, Host, OpenCodeScope}, claude_code, control, classification::build_provider, config::Config, gateway::GatewayServer, protocol::{CapabilityLevel, DecisionOutcome, Diagnostic, NormalizedDecision, PROTOCOL_VERSION, EXIT_INTERNAL_ERROR, EXIT_MALFORMED_EVENT, EXIT_STARTUP_FAILURE, EXIT_TIMEOUT, EXIT_UNSUPPORTED_VERSION}, runtime::{process_event_safe, record_decision}};
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -40,6 +40,12 @@ fn main() {
         Some("gateway") => command_gateway(&args, config),
         Some("benchmark") => command_benchmark(&config),
         Some("prices") => command_prices(&args, &config),
+        Some("toggle") => {
+            let enabled = match args.get(1).map(String::as_str) { Some("on") => Some(true), Some("off") => Some(false), _ => None };
+            println!("{}", run_control(claude_code::Control::Toggle(enabled), config_path.as_deref(), &config));
+        }
+        Some("status") => println!("{}", run_control(claude_code::Control::Status, config_path.as_deref(), &config)),
+        Some("stats") => println!("{}", run_control(claude_code::Control::Stats, config_path.as_deref(), &config)),
         Some("hook") => command_hook(&args, config),
         _ => command_event(config),
     }
@@ -56,6 +62,8 @@ fn print_help() {
     println!("  doctor                                                Show host and configuration diagnostics");
     println!("  hook --host <host>                                    Process one host hook event");
     println!("  gateway                                               Start the optional routing gateway");
+    println!("  toggle [on|off]                                       Turn routing on or off (also /s1router_toggle)");
+    println!("  status | stats                                        Show routing status or usage stats");
     println!("  prices [--refresh]                                    Show rule target prices (LiteLLM table)");
     println!("  benchmark                                             Run a local routing benchmark");
     println!("  <no command>                                          Read a normalized event from stdin");
@@ -349,6 +357,22 @@ fn command_prices(args: &[String], config: &Config) {
 
 fn command_benchmark(config: &Config) { let provider = build_provider(config); let event = adapters::normalize(Host::Generic, json!({ "prompt": "benchmark", "sessionId": "benchmark", "event": "benchmark" }), None); let start = std::time::Instant::now(); for _ in 0..100 { let _ = process_event_safe(&event, config, provider.as_ref()); } print_json(json!({ "iterations": 100, "elapsedMs": start.elapsed().as_millis(), "averageMs": start.elapsed().as_secs_f64() * 1000.0 / 100.0, "provider": provider.name() })); }
 
+/// Runs a router control and returns the one-line message for the user.
+fn run_control(control: claude_code::Control, config_path: Option<&Path>, config: &Config) -> String {
+    match control {
+        claude_code::Control::Toggle(enabled) => {
+            let Some(path) = config_path.map(Path::to_path_buf).or_else(system1router_core::config::default_config_path) else { return "System1Router: no config path; set SYSTEM1ROUTER_CONFIG.".into(); };
+            match control::set_routing_enabled(&path, enabled) {
+                Ok(true) => "System1Router routing ON: new prompts are classified.".into(),
+                Ok(false) => "System1Router routing OFF: prompts keep the current model.".into(),
+                Err(error) => format!("System1Router: could not toggle routing: {error}"),
+            }
+        }
+        claude_code::Control::Status => format!("System1Router · {}", control::status_text(config, config_path)),
+        claude_code::Control::Stats => format!("System1Router · {}", control::format_stats(&control::read_stats())),
+    }
+}
+
 fn command_hook(args: &[String], config: Config) {
     let host_name = argument(args, "--host").unwrap_or("generic");
     let Some(host) = Host::parse(host_name) else { eprintln!("unsupported host: {host_name}"); std::process::exit(EXIT_STARTUP_FAILURE); };
@@ -360,6 +384,12 @@ fn command_hook(args: &[String], config: Config) {
         Ok(payload) => payload,
         Err(error) => { eprintln!("system1router: malformed hook input: {error}"); let decision = bypass("malformed_event", "hook input was not valid JSON", "unknown".into()); print_json(adapters::translate_decision(host, &decision)); std::process::exit(exit_with(EXIT_MALFORMED_EVENT)); }
     };
+    if host == Host::ClaudeCode {
+        if let Some(control) = payload.get("prompt").and_then(Value::as_str).and_then(claude_code::control_command) {
+            print_json(claude_code::control_response(&run_control(control, argument(args, "--config").map(Path::new), &config)));
+            return;
+        }
+    }
     let event = adapters::normalize(host, payload, env::current_dir().ok().and_then(|path| path.to_str().map(str::to_owned)));
     let provider = build_provider(&config);
     let decision = process_event_safe(&event, &config, provider.as_ref());
