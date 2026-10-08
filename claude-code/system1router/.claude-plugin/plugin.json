@@ -1,0 +1,17 @@
+{
+  "name": "system1router",
+  "version": "0.1.0",
+  "description": "Routes each Claude Code turn to the model System1Router suggests, with a consent dialog, a status line and a /s1router dashboard",
+  "author": {
+    "name": "Emmanuel Letremble"
+  },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "executable": {
+      "type": "string",
+      "title": "system1router executable",
+      "description": "Path of the system1router binary, or its name on PATH",
+      "default": "system1router"
+    }
+  }
+}

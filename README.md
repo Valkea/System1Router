@@ -101,6 +101,7 @@ The installer lists the detected assistants (OpenCode, Claude Code) and asks whi
 
 - **OpenCode**: server and TUI plugins under `.opencode/` or `~/.config/opencode/`. Routing switches the model of the request itself after you confirm.
 - **Claude Code**: a `UserPromptSubmit` hook in `.claude/settings.local.json` or `~/.claude/settings.json`. Claude Code cannot switch models from a hook, so the suggestion and its `/model` command are shown above the reply. Add rules with `"host": "claude-code"` and Anthropic targets (`opus`, `sonnet`, `haiku`). `/s1router_toggle`, `/s1router_config` and `/s1router_stats` work there too, without using a model turn.
+- **Claude Code mod** (early-access mod API, verified with Claude Code 2.1.294): `claude-code/system1router/` switches the model of the turn itself after a native consent dialog, shows the decision in the status line and adds a `/s1router` dashboard. See [docs/CLIENTS.md](docs/CLIENTS.md#claude-code-mod).
 
 The same controls are available from any shell: `system1router toggle [on|off]`, `system1router status`, `system1router stats`. `system1router uninstall --host opencode --scope <scope>` removes only files created by this installer. If a project already includes the System1Router plugin, it is already installed locally; the global option warns about loading both copies in that project.
 

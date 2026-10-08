@@ -6,6 +6,7 @@ Adapters are installed in this order: OpenCode, Claude Code, Codex, GitHub Copil
 | --- | --- | --- | --- |
 | OpenCode | `system1router install` (project or global scope) | consent-gated full override | Model choice picker runs before generation; acceptance changes this user message's model and variant |
 | Claude Code | `system1router install --host claude-code` (project or global scope) | advisory | Hooks cannot change the request's model; the suggestion and the `/model` command are shown to the user |
+| Claude Code mod | `claude --plugin-dir claude-code/system1router` (see below) | consent-gated per-turn override | The mod sends every model request of the turn to the accepted model and effort; the session's model is unchanged |
 | Codex | `system1router init --host codex` | consent-only | tool hooks are not model-request hooks |
 | Copilot CLI | `system1router init --host copilot-cli` | observe-only | documented prompt fields only |
 | Copilot VS Code | `system1router init --host copilot-vscode` | observe-only | documented prompt/tool fields only |
@@ -43,6 +44,24 @@ Sending `.` (or the same prompt again) releases the held message, which Claude r
 Nothing is added to the model's context, other slash commands are ignored, and any router failure exits 0 so Claude Code never reports a hook error. Rule targets can use aliases (`opus`, `sonnet`, `haiku`) or full model IDs. Verified with Claude Code 2.1.285.
 
 Codex and Copilot installers are unchanged and unverified against current host versions.
+
+## Claude Code mod
+
+Claude Code mods are plugins of function hooks that run inside Claude Code. `claude-code/system1router/` is one, and unlike the command hook it can change the model a turn runs on. The mod API is early access and may change between Claude Code releases; this mod is verified with Claude Code 2.1.294.
+
+Load it for one session with `claude --plugin-dir /path/to/system1router/claude-code/system1router`, or for every session by adding that folder to `CLAUDE_CODE_PLUGIN_DIRS` in the `env` block of `~/.claude/settings.json`. The mod calls the `system1router` executable on `PATH`; set its `executable` option (`pluginConfigs.system1router.options.executable` in user settings) to use another path.
+
+For each prompt the person types, the mod runs `system1router decide` with the session id, directory, prompt and the session's model. The binary finds the transcript, classifies as the hook does, and answers what to do:
+
+- **ask**: a native dialog offers **Use opus · high**, **Keep sonnet 5.5**, **Always switch to opus** and **Never switch to opus**. Escape keeps the current model. Always/Never are stored in `consent-preferences.json`, the file OpenCode's dialog uses, so a remembered pair applies to both hosts.
+- **switch** / **keep**: a remembered answer, or a non-interactive `consent.mode`, decided without asking.
+- **none**: routing is off, nothing better was found, or the switch would discard a warm prompt cache.
+
+An accepted switch applies to every model request of that turn (`turn.step`), with the rule's variant as the effort when it is one of `low`, `medium`, `high`, `xhigh` or `max`. Subagents keep their own models, and the next prompt starts again from the session's model, which `/model` still controls. The API needs full model ids, so `decide` turns a rule's alias into candidate ids, newest first: Claude Code's own `ANTHROPIC_DEFAULT_<ALIAS>_MODEL` when set, otherwise the price table's ids and the current model's generation (`haiku` on `claude-opus-5-5` tries `claude-haiku-5-5`). If the API refuses an id, the mod tries the next one, then runs the turn on the session's model and says so in a toast.
+
+The status line shows the last decision (`S1R · code_hard → opus · high`, `S1R · question_simple · kept sonnet 5.5`, `S1R off`). `/s1router` opens a dashboard pane: routing status with an on/off button, this session's routed prompts, stats across hosts, and remembered answers with **Forget** buttons. The mod also answers `/s1router_toggle [on|off]`, `/s1router_config` and `/s1router_stats`, registering them when the hook's command files are absent. Answers are recorded with `system1router choice`, and the dashboard reads `system1router panel`; `system1router forget [KEY]` forgets one remembered answer or all of them.
+
+The mod sets `SYSTEM1ROUTER_CLAUDE_MOD=1` for its session. The command hook, when also installed, then leaves routing to the mod and only answers the `/s1router_*` commands, so prompts are never classified twice. In `claude -p` runs nobody can be asked: only remembered answers and non-interactive consent modes switch. Run the mod's tests with `claude plugin test claude-code/system1router`.
 
 ## Generic hook contract
 
