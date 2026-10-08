@@ -148,6 +148,7 @@ test('the dashboard draws status, stats and remembered answers, and acts on them
       props: { title: 'System1Router', isFocused: true, bodyColumns: 70, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
     })
     expect(await ui.find({ text: /Routing ON/ })).toBeDefined()
+    expect(await ui.find({ text: /Esc closes/ })).toBeDefined()
     expect(await ui.find({ text: /anthropic\/claude-sonnet-5-5 → anthropic\/haiku/ })).toBeDefined()
     expect(await ui.find({ text: /4 answered · 3 accepted \(75%\)/ })).toBeDefined()
     await ui.press({ key: 'toggle' })
@@ -180,4 +181,16 @@ test('the mod marks its session for the command hook, again after /clear', async
   expect(state.env).toBe('session-1')
   await $.classic.SessionStart({ source: 'clear', session_id: 'session-2' })
   expect(state.env).toBe('session-2')
+})
+
+test('an unfocused pane on the terminal main screen says how to reach its buttons', async ($, on) => {
+  engine(on, ASK)
+  await $.command.run({ command: 's1router', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 100 } })
+  const ui = await $.ui.mount({
+    plugin: 'system1router', surface: 'terminal', component: 'Pane', requestId: 's1router',
+    props: { title: 'System1Router', isFocused: false, bodyColumns: 90, placement: 'inline', scroll: { offset: 0, bodyRows: 20 }, view: {} },
+    viewport: { columns: 100, rows: 40, isFullscreen: false },
+  })
+  expect(await ui.find({ text: /ctrl\+x tab to use the buttons/ })).toBeDefined()
+  await ui.unmount()
 })

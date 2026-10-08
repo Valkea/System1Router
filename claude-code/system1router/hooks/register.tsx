@@ -260,6 +260,13 @@ export const register: Register = (on, options) => {
     const list = await read($, routed)
     const failure = await read($, problem)
     const width = Math.max(30, e.props.bodyColumns ?? 60)
+    // The terminal reports clicks only in its fullscreen layout; elsewhere the
+    // pane is used from the keyboard once it holds the focus.
+    const keys = e.props.isFocused
+      ? 't, r, q or Tab and Enter · Esc closes'
+      : e.surface === 'terminal' && e.viewport?.isFullscreen !== true
+        ? 'ctrl+x tab to use the buttons (then t, r, q or Tab and Enter) · ctrl+x x closes'
+        : null
 
     if (!data) {
       return (
@@ -281,12 +288,14 @@ export const register: Register = (on, options) => {
       <Box flexDirection="column">
         <Box flexDirection="row">
           <Text bold color={status.enabled ? 'green' : 'yellow'}>Routing {status.enabled ? 'ON' : 'OFF'} </Text>
-          <Button key="toggle" hotkey="t" variant="primary" label={status.enabled ? 'Turn off' : 'Turn on'} onPress={() => toggle($)} />
-          <Text> </Text>
-          <Button key="refresh" hotkey="r" label="Refresh" onPress={() => refresh($)} />
-          <Text> </Text>
-          <Button key="close" hotkey="q" role="dismiss" label="Close" onPress={() => closePane($)} />
+          {/* plain: the terminal draws the hotkey beside the label (`t: Turn off`) */}
+          <Button key="toggle" hotkey="t" plain autoFocus label={status.enabled ? 'Turn off' : 'Turn on'} onPress={() => toggle($)} />
+          <Text>  </Text>
+          <Button key="refresh" hotkey="r" plain label="Refresh" onPress={() => refresh($)} />
+          <Text>  </Text>
+          <Button key="close" hotkey="q" plain role="dismiss" label="Close" onPress={() => closePane($)} />
         </Box>
+        {keys && <Text dimColor>{keys}</Text>}
         <Text dimColor>
           {status.provider}{status.providerReady ? '' : ' (not configured)'} · {status.rules} rules ({status.claudeCodeRules} for Claude Code) · consent {status.consentMode}
         </Text>
