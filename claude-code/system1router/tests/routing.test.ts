@@ -27,11 +27,13 @@ type Fake = {
   toasts: string[]
   /** SYSTEM1ROUTER_CLAUDE_MOD as the mod set it. */
   env: string | undefined
+  /** Ids of the open panes. */
+  panes: string[]
 }
 
 /** The engine beneath the mod: the binary, the session, the dialog and the turn. */
 function engine(on: On, decision: object, answer?: string): Fake {
-  const state: Fake = { decision, answer, calls: [], stdin: [], sent: { model: '', effort: undefined }, tried: [], unknown: [], toasts: [], env: undefined }
+  const state: Fake = { decision, answer, calls: [], stdin: [], sent: { model: '', effort: undefined }, tried: [], unknown: [], toasts: [], env: undefined, panes: [] }
   on('process.run', ($, e) => {
     state.calls.push([...e.argv.slice(1)])
     if (e.init?.stdin) state.stdin.push(e.init.stdin)
@@ -48,7 +50,15 @@ function engine(on: On, decision: object, answer?: string): Fake {
     state.env = e.value
     return { value: undefined }
   })
-  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.open', ($, e) => {
+    state.panes = [e.id]
+    return { value: { isPlaced: true } }
+  })
+  on('ui.close', ($, e) => {
+    state.panes = state.panes.filter(id => id !== e.id)
+    return { value: undefined }
+  })
+  on('ui.panes', () => ({ value: state.panes.map(id => ({ id, title: 'System1Router', isShown: true, isFocused: true, isPlaced: true })) }))
   on('ui.toast', ($, e) => {
     state.toasts.push(e.text)
     return { value: undefined }
@@ -144,8 +154,20 @@ test('the dashboard draws status, stats and remembered answers, and acts on them
     expect(state.calls.at(-2)).toEqual(['toggle'])
     await ui.press({ key: 'forget-0' })
     expect(state.calls.at(-2)).toEqual(['forget', 'anthropic/claude-sonnet-5-5 → anthropic/haiku'])
+    await ui.press({ key: 'close' })
+    expect(state.panes).toEqual([])
     await ui.unmount()
+    await $.command.run({ command: 's1router', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } })
   }
+})
+
+test('/s1router toggles the dashboard', async ($, on) => {
+  const state = engine(on, ASK)
+  const run = () => $.command.run({ command: 's1router', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 100 } })
+  expect((await run()).text).toContain('opened')
+  expect(state.panes).toEqual(['s1router'])
+  expect((await run()).text).toContain('closed')
+  expect(state.panes).toEqual([])
 })
 
 test('the mod marks its session for the command hook, again after /clear', async ($, on) => {

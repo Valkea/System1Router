@@ -78,9 +78,20 @@ async function refresh($: EngineInterface): Promise<Panel | null> {
   }
 }
 
-async function openPane($: EngineInterface): Promise<void> {
+/** `/s1router` opens the dashboard, or closes it when it is already open. */
+async function togglePane($: EngineInterface): Promise<boolean> {
+  if ((await $.ui.panes()).some(pane => pane.id === PANE)) {
+    await closePane($)
+    return false
+  }
   await refresh($)
-  await $.ui.open({ id: PANE, title: 'System1Router' })
+  // Escape closes it too, as a dialog's would.
+  await $.ui.open({ id: PANE, title: 'System1Router', focus: true, closeOnEscape: true })
+  return true
+}
+
+async function closePane($: EngineInterface): Promise<void> {
+  await $.ui.close({ id: PANE })
 }
 
 async function toggle($: EngineInterface, force?: 'on' | 'off'): Promise<string> {
@@ -230,10 +241,9 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  on('command.run', { command: 's1router' }, async $ => {
-    await openPane($)
-    return { text: 'System1Router dashboard opened.' }
-  })
+  on('command.run', { command: 's1router' }, async $ => ({
+    text: (await togglePane($)) ? 'System1Router dashboard opened (Esc or q closes it).' : 'System1Router dashboard closed.',
+  }))
 
   on('command.run', { command: 's1router_toggle' }, async ($, e) => {
     const word = e.args.trim()
@@ -274,6 +284,8 @@ export const register: Register = (on, options) => {
           <Button key="toggle" hotkey="t" variant="primary" label={status.enabled ? 'Turn off' : 'Turn on'} onPress={() => toggle($)} />
           <Text> </Text>
           <Button key="refresh" hotkey="r" label="Refresh" onPress={() => refresh($)} />
+          <Text> </Text>
+          <Button key="close" hotkey="q" role="dismiss" label="Close" onPress={() => closePane($)} />
         </Box>
         <Text dimColor>
           {status.provider}{status.providerReady ? '' : ' (not configured)'} · {status.rules} rules ({status.claudeCodeRules} for Claude Code) · consent {status.consentMode}
