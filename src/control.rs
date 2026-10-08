@@ -2,7 +2,8 @@
 //! stats. OpenCode has its own TUI versions of these; Claude Code reaches
 //! them through `/s1router_*` prompts intercepted by its hook.
 use crate::config::{default_config_path, Config};
-use serde_json::Value;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::{collections::BTreeMap, env, fs, path::{Path, PathBuf}};
 
 pub fn state_directory() -> Option<PathBuf> {
@@ -110,19 +111,109 @@ pub fn format_stats(stats: &Stats) -> String {
     format!("Prompts: {} ({hosts}). By model: {models}. Answered suggestions: {} (accepted {}, {rate}). Advisory suggestions: {}.", stats.calls, stats.answered, stats.accepted, stats.advised)
 }
 
+fn provider_ready(config: &Config) -> bool {
+    let summary = config.safe_summary();
+    match config.providers.selected.as_str() { "jev" => summary["jevConfigured"] == true, "laya" => summary["layaConfigured"] == true, _ => false }
+}
+
 pub fn status_text(config: &Config, path: Option<&Path>) -> String {
     let path = path.map(Path::to_path_buf).or_else(default_config_path);
-    let summary = config.safe_summary();
-    let provider_ready = match config.providers.selected.as_str() { "jev" => summary["jevConfigured"] == true, "laya" => summary["layaConfigured"] == true, _ => false };
     format!(
         "Routing {} · provider {}{} · {} rule(s) · config {} · provider log {}",
         if config.routing.enabled { "ON" } else { "OFF" },
         config.providers.selected,
-        if provider_ready { "" } else { " (not configured)" },
+        if provider_ready(config) { "" } else { " (not configured)" },
         config.rules.len(),
         path.map(|path| path.display().to_string()).unwrap_or_else(|| "(none)".into()),
         provider_log_path().map(|path| path.display().to_string()).unwrap_or_else(|| "(none)".into()),
     )
+}
+
+/// Everything the Claude Code mod's dashboard shows, in one call.
+pub fn panel(config: &Config, path: Option<&Path>) -> Value {
+    let path = path.map(Path::to_path_buf).or_else(default_config_path);
+    let stats = read_stats();
+    json!({
+        "status": {
+            "enabled": config.routing.enabled,
+            "provider": config.providers.selected,
+            "providerReady": provider_ready(config),
+            "rules": config.rules.len(),
+            "claudeCodeRules": config.rules.iter().filter(|rule| rule.host.as_deref() == Some("claude-code")).count(),
+            "consentMode": config.consent.mode,
+            "configPath": path,
+            "providerLog": provider_log_path(),
+        },
+        "stats": { "calls": stats.calls, "models": stats.models, "answered": stats.answered, "accepted": stats.accepted, "advised": stats.advised, "byHost": stats.by_host },
+        "preferences": read_preferences(),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Remembered consent answers, shared with OpenCode's dialog
+// (`.opencode/plugins/system1router/shared.ts` writes the same file).
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Preference {
+    pub key: String,
+    pub accept: bool,
+    pub current: String,
+    pub suggested: String,
+    #[serde(default)]
+    pub created_at: u64,
+}
+
+/// A model as OpenCode labels it: `provider/model (variant)`.
+pub fn model_label(provider: &str, model: &str, variant: Option<&str>) -> String {
+    format!("{provider}/{model}{}", variant.map(|variant| format!(" ({variant})")).unwrap_or_default())
+}
+
+pub fn preference_key(current: &str, suggested: &str) -> String { format!("{current} → {suggested}") }
+
+fn preferences_path() -> Option<PathBuf> { state_directory().map(|directory| directory.join("consent-preferences.json")) }
+
+pub fn read_preferences() -> Vec<Preference> { preferences_path().map(|path| read_preferences_at(&path)).unwrap_or_default() }
+
+fn read_preferences_at(path: &Path) -> Vec<Preference> {
+    let Ok(text) = fs::read_to_string(path) else { return Vec::new(); };
+    let Ok(value) = serde_json::from_str::<Value>(&text) else { return Vec::new(); };
+    // Skip malformed entries rather than losing every remembered answer.
+    value.get("preferences").and_then(Value::as_array).into_iter().flatten().filter_map(|item| serde_json::from_value(item.clone()).ok()).collect()
+}
+
+pub fn remembered(key: &str) -> Option<bool> { read_preferences().into_iter().find(|item| item.key == key).map(|item| item.accept) }
+
+pub fn remember(current: &str, suggested: &str, accept: bool) -> Result<(), String> {
+    remember_at(&preferences_path().ok_or("no state directory")?, current, suggested, accept)
+}
+
+fn remember_at(path: &Path, current: &str, suggested: &str, accept: bool) -> Result<(), String> {
+    let key = preference_key(current, suggested);
+    let mut preferences = read_preferences_at(path);
+    preferences.retain(|item| item.key != key);
+    let created_at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|value| value.as_millis() as u64).unwrap_or_default();
+    preferences.push(Preference { key, accept, current: current.into(), suggested: suggested.into(), created_at });
+    write_preferences(path, &preferences)
+}
+
+/// Forgets one remembered answer by key, or all of them; returns how many.
+pub fn forget(key: Option<&str>) -> Result<usize, String> { forget_at(&preferences_path().ok_or("no state directory")?, key) }
+
+fn forget_at(path: &Path, key: Option<&str>) -> Result<usize, String> {
+    let mut preferences = read_preferences_at(path);
+    let before = preferences.len();
+    match key { Some(key) => preferences.retain(|item| item.key != key), None => preferences.clear() }
+    if preferences.len() != before { write_preferences(path, &preferences)?; }
+    Ok(before - preferences.len())
+}
+
+fn write_preferences(path: &Path, preferences: &[Preference]) -> Result<(), String> {
+    if let Some(parent) = path.parent() { fs::create_dir_all(parent).map_err(|error| format!("create {}: {error}", parent.display()))?; }
+    let temporary = path.with_extension(format!("json.{}.tmp", std::process::id()));
+    let text = serde_json::to_string_pretty(&json!({ "preferences": preferences })).map_err(|error| error.to_string())?;
+    fs::write(&temporary, text).map_err(|error| format!("write {}: {error}", temporary.display()))?;
+    fs::rename(&temporary, path).map_err(|error| { let _ = fs::remove_file(&temporary); format!("replace {}: {error}", path.display()) })
 }
 
 #[cfg(test)]
@@ -179,5 +270,28 @@ mod tests {
         assert_eq!((stats.calls, stats.answered, stats.accepted, stats.advised), (3, 2, 1, 1));
         assert_eq!(stats.by_host["claude-code"], 1);
         assert!(format_stats(&stats).contains("accepted 1, 50%"));
+    }
+
+    #[test]
+    fn preferences_round_trip_in_the_opencode_format() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("consent-preferences.json");
+        // As OpenCode's shared.ts writes it, plus one malformed entry.
+        fs::write(&path, r#"{"preferences":[{"key":"openai/gpt-5 → openai/gpt-5 (high)","accept":true,"current":"openai/gpt-5","suggested":"openai/gpt-5 (high)","createdAt":1},{"key":7}]}"#).unwrap();
+        assert_eq!(read_preferences_at(&path).len(), 1);
+        let current = model_label("anthropic", "claude-sonnet-5-5", None);
+        let suggested = model_label("anthropic", "opus", Some("high"));
+        assert_eq!(suggested, "anthropic/opus (high)");
+        remember_at(&path, &current, &suggested, false).unwrap();
+        remember_at(&path, &current, &suggested, true).unwrap();
+        let preferences = read_preferences_at(&path);
+        assert_eq!(preferences.len(), 2, "answering again replaces the pair");
+        assert_eq!((preferences[1].key.as_str(), preferences[1].accept), ("anthropic/claude-sonnet-5-5 → anthropic/opus (high)", true));
+        let written: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(written["preferences"][1]["createdAt"].as_u64().unwrap() > 0, "camelCase keys, as OpenCode reads them");
+        assert_eq!(forget_at(&path, Some("missing")).unwrap(), 0);
+        assert_eq!(forget_at(&path, Some(&preference_key(&current, &suggested))).unwrap(), 1);
+        assert_eq!(forget_at(&path, None).unwrap(), 1);
+        assert!(read_preferences_at(&path).is_empty());
     }
 }

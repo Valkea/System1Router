@@ -47,9 +47,10 @@ pub fn normalize(payload: Value, fallback_cwd: Option<String>) -> NormalizedEven
         turn_id: None,
         cwd,
         request: RequestPayload { query, ..Default::default() },
-        // The transcript shows the model actually answering; before the first
-        // reply, fall back to the configured model.
-        current_model: transcript.model.clone().or_else(|| configured_model(cwd_for_settings.as_deref())).map(|model| ModelState { provider: "anthropic".into(), model, variant: None, scope: Some(session_id) }),
+        // The mod knows the session's model. A hook does not: the transcript
+        // shows the model actually answering, and before the first reply the
+        // configured model is the best guess.
+        current_model: text("model").filter(|model| !model.trim().is_empty()).or(transcript.model.clone()).or_else(|| configured_model(cwd_for_settings.as_deref())).map(|model| ModelState { provider: "anthropic".into(), model, variant: None, scope: Some(session_id) }),
         context: BoundedContext {
             conversation_summary: transcript.summary,
             files: transcript.files,
@@ -233,6 +234,90 @@ pub fn ask(decision: &NormalizedDecision, event: &NormalizedEvent) -> Option<Val
     Some(json!({ "decision": "block", "reason": format!(
         "S1R · {} ({percent:.0}%) suggests {model} instead of {current_label}. {}\n  → switch: /model {model} then send {RESUME}\n  → keep {current_label}: send {RESUME}\nYour message is held and will be sent as is; nothing was sent yet.",
         recommendation.routing_class, recommendation.reason) }))
+}
+
+// ---------------------------------------------------------------------------
+// The Claude Code mod
+//
+// The System1Router mod (function hooks, `claude-code/system1router`) switches
+// the model of the turn itself, so it asks in a native dialog and only needs
+// the decision. While it runs it sets MOD_ENV to its session id, and the
+// command hook of that session leaves routing to it so a prompt is never
+// classified twice. Matching the id keeps a nested `claude` without the mod,
+// which inherits the variable, routed by its own hook.
+
+pub const MOD_ENV: &str = "SYSTEM1ROUTER_CLAUDE_MOD";
+
+pub fn mod_active(session_id: &str) -> bool { !session_id.is_empty() && env::var(MOD_ENV).is_ok_and(|value| value == session_id) }
+
+/// The session's transcript under `<config dir>/projects/*/`, for a caller
+/// that knows only the session id.
+pub fn find_transcript(session_id: &str) -> Option<PathBuf> {
+    if session_id.is_empty() || session_id.contains(['/', '\\']) || session_id.contains("..") { return None; }
+    let base = env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from).unwrap_or_else(|| home().join(".claude"));
+    let name = format!("{session_id}.jsonl");
+    fs::read_dir(base.join("projects")).ok()?.flatten().map(|entry| entry.path().join(&name)).find(|path| path.is_file())
+}
+
+/// Claude Code sends a turn's model as given, so a rule's alias (`opus`) must
+/// become ids the API knows. Claude Code's own alias settings
+/// (`ANTHROPIC_DEFAULT_OPUS_MODEL`, ...) win; otherwise the newest ids of the
+/// family among the price table and the current model's generation, newest
+/// first: the price table can lag a release, and a generation guess can name
+/// a model that does not exist, so the mod tries them in order.
+pub fn model_ids(target: &str, current: Option<&str>, table: Option<&crate::prices::PriceTable>) -> Vec<String> {
+    if target.starts_with("claude-") || target.is_empty() || !target.chars().all(|c| c.is_ascii_lowercase()) { return vec![target.into()]; }
+    if let Some(model) = env::var(format!("ANTHROPIC_DEFAULT_{}_MODEL", target.to_ascii_uppercase())).ok().filter(|model| !model.trim().is_empty()) { return vec![model]; }
+    let prefix = format!("claude-{target}-");
+    // `5-5` and `5` are versions; a dated id (`4-5-20251001`) or a variant is not.
+    let version = |id: &str| id.strip_prefix(&prefix)?.split('-').map(|part| part.parse::<u32>().ok().filter(|value| *value < 1000)).collect::<Option<Vec<_>>>().filter(|parts| parts.len() <= 2);
+    let generation = current.and_then(|current| current.split('[').next()?.strip_prefix("claude-")?.split_once('-').map(|(_, version)| format!("{prefix}{version}")));
+    let known = table.into_iter().flat_map(|table| table.iter().filter(|(_, entry)| entry.provider == "anthropic").map(|(name, _)| name.clone()));
+    let mut ids: Vec<(Vec<u32>, String)> = known.chain(generation).filter_map(|id| Some((version(&id)?, id))).collect();
+    ids.sort_by(|a, b| b.cmp(a));
+    ids.dedup_by(|a, b| a.1 == b.1);
+    let ids: Vec<String> = ids.into_iter().map(|(_, id)| id).take(3).collect();
+    if ids.is_empty() { vec![target.into()] } else { ids }
+}
+
+/// The decision as the mod acts on it. `action` is `ask` (show the dialog),
+/// `switch` or `keep` (decided without asking: a remembered answer or a
+/// non-interactive consent mode) or `none` (nothing to choose). `record` says
+/// the mod must report the outcome with `system1router choice`, because the
+/// core left the answer to the host.
+pub fn mod_decision(decision: &NormalizedDecision, event: &NormalizedEvent, table: Option<&crate::prices::PriceTable>, remembered: impl Fn(&str) -> Option<bool>) -> Value {
+    let current = event.current_model.as_ref().map(|state| state.model.as_str());
+    let mut output = json!({ "action": "none", "record": false, "current": current, "code": decision.diagnostic.code, "message": decision.diagnostic.message });
+    let Some(recommendation) = decision.recommendation.as_ref().filter(|_| decision.outcome != DecisionOutcome::Block) else { return output; };
+    let Some(model) = recommendation.model.as_deref() else { return output; };
+    output["routingClass"] = json!(recommendation.routing_class);
+    output["confidence"] = json!(recommendation.confidence.routing_class);
+    output["reason"] = json!(recommendation.reason);
+    if current.is_some_and(|current| same_model(current, model)) { return output; }
+    let variant = recommendation.variant.as_deref();
+    let current_label = crate::control::model_label("anthropic", current.unwrap_or("default"), None);
+    // Claude Code only runs Anthropic models; `choice` labels them the same way.
+    let suggested_label = crate::control::model_label("anthropic", model, variant);
+    let (action, record, remembered) = if decision.outcome == DecisionOutcome::Ask {
+        match remembered(&crate::control::preference_key(&current_label, &suggested_label)) {
+            Some(true) => ("switch", true, Some(true)),
+            Some(false) => ("keep", true, Some(false)),
+            None => ("ask", true, None),
+        }
+    } else if decision.consent == Some(crate::protocol::ConsentOutcome::UseSuggestedModel) {
+        ("switch", false, None)
+    } else {
+        ("keep", false, None)
+    };
+    output["action"] = json!(action);
+    output["record"] = json!(record);
+    output["remembered"] = json!(remembered);
+    output["model"] = json!(model);
+    output["modelIds"] = json!(model_ids(model, current, table));
+    output["variant"] = json!(variant);
+    output["currentLabel"] = json!(current_label);
+    output["suggestedLabel"] = json!(suggested_label);
+    output
 }
 
 /// Router controls typed as prompts. The hook answers them itself and blocks
@@ -564,6 +649,81 @@ not json
         assert!(commands.join("mine.md").exists());
         fs::write(commands.join("s1router_stats.md"), "user-owned").unwrap();
         assert!(install(&path, "system1router").is_err(), "never overwrite a user's file");
+    }
+
+    #[test]
+    fn mod_decision_says_what_to_do() {
+        let mut event = normalize(json!({ "session_id": "s", "prompt": "refactor the parser", "model": "claude-sonnet-5-5" }), None);
+        assert_eq!(event.current_model.as_ref().unwrap().model, "claude-sonnet-5-5", "the mod's model wins over the transcript and settings");
+        let none = |_: &str| None;
+        let asked = mod_decision(&decision(DecisionOutcome::Ask, Some("opus")), &event, None, none);
+        assert_eq!((asked["action"].as_str(), asked["record"].as_bool(), asked["model"].as_str()), (Some("ask"), Some(true), Some("opus")));
+        assert_eq!((asked["routingClass"].as_str(), asked["current"].as_str()), (Some("code_hard"), Some("claude-sonnet-5-5")));
+        let key = asked["currentLabel"].as_str().unwrap().to_owned() + " → " + asked["suggestedLabel"].as_str().unwrap();
+        assert_eq!(key, "anthropic/claude-sonnet-5-5 → anthropic/opus");
+        let always = mod_decision(&decision(DecisionOutcome::Ask, Some("opus")), &event, None, |asked: &str| (asked == key).then_some(true));
+        assert_eq!((always["action"].as_str(), always["remembered"].as_bool()), (Some("switch"), Some(true)));
+        let never = mod_decision(&decision(DecisionOutcome::Ask, Some("opus")), &event, None, |_: &str| Some(false));
+        assert_eq!(never["action"], "keep");
+        let mut auto = decision(DecisionOutcome::Allow, Some("opus"));
+        auto.consent = Some(ConsentOutcome::UseSuggestedModel);
+        let switched = mod_decision(&auto, &event, None, none);
+        assert_eq!((switched["action"].as_str(), switched["record"].as_bool()), (Some("switch"), Some(false)), "the core already recorded it");
+        assert_eq!(mod_decision(&decision(DecisionOutcome::Bypass, None), &event, None, none)["action"], "none");
+        assert_eq!(mod_decision(&decision(DecisionOutcome::Block, Some("opus")), &event, None, none)["action"], "none");
+        event.current_model.as_mut().unwrap().model = "claude-opus-5-5".into();
+        let same = mod_decision(&decision(DecisionOutcome::Ask, Some("opus")), &event, None, none);
+        assert_eq!((same["action"].as_str(), same["routingClass"].as_str()), (Some("none"), Some("code_hard")), "already on it, but the class is still shown");
+    }
+
+    #[test]
+    fn aliases_become_model_ids_newest_first() {
+        let table = crate::prices::trim(&json!({
+            "claude-haiku-4-5": { "input_cost_per_token": 1e-6, "litellm_provider": "anthropic" },
+            "claude-haiku-4-5-20251001": { "input_cost_per_token": 1e-6, "litellm_provider": "anthropic" },
+            "claude-opus-5": { "input_cost_per_token": 5e-6, "litellm_provider": "anthropic" },
+            "claude-opus-5-5": { "input_cost_per_token": 5e-6, "litellm_provider": "anthropic" },
+            "bedrock/claude-opus-6-0": { "input_cost_per_token": 5e-6, "litellm_provider": "bedrock" }
+        }));
+        let previous = env::var_os("ANTHROPIC_DEFAULT_HAIKU_MODEL");
+        env::remove_var("ANTHROPIC_DEFAULT_HAIKU_MODEL");
+        // The table lags: the current generation's sibling comes first, the table's id is the fallback.
+        let haiku = model_ids("haiku", Some("claude-opus-5-5[1m]"), Some(&table));
+        let opus = model_ids("opus", Some("claude-fable-5-1"), Some(&table));
+        let unknown = model_ids("fable", None, None);
+        env::set_var("ANTHROPIC_DEFAULT_HAIKU_MODEL", "my-haiku");
+        let overridden = model_ids("haiku", Some("claude-opus-5-5"), Some(&table));
+        match previous { Some(value) => env::set_var("ANTHROPIC_DEFAULT_HAIKU_MODEL", value), None => env::remove_var("ANTHROPIC_DEFAULT_HAIKU_MODEL") }
+        assert_eq!(haiku, vec!["claude-haiku-5-5", "claude-haiku-4-5"]);
+        assert_eq!(opus, vec!["claude-opus-5-5", "claude-opus-5-1", "claude-opus-5"]);
+        assert_eq!(unknown, vec!["fable"], "nothing better: the mod falls back to the session's model");
+        assert_eq!(overridden, vec!["my-haiku"]);
+        assert_eq!(model_ids("claude-sonnet-5-5", None, Some(&table)), vec!["claude-sonnet-5-5"]);
+    }
+
+    #[test]
+    fn the_mod_routes_only_its_own_session() {
+        let previous = env::var_os(MOD_ENV);
+        env::set_var(MOD_ENV, "session-a");
+        let (own, nested, empty) = (mod_active("session-a"), mod_active("session-b"), mod_active(""));
+        match previous { Some(value) => env::set_var(MOD_ENV, value), None => env::remove_var(MOD_ENV) }
+        assert!(own && !nested && !empty);
+    }
+
+    #[test]
+    fn transcripts_are_found_by_session_id() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("projects/-work-app");
+        fs::create_dir_all(&project).unwrap();
+        fs::write(project.join("abc-123.jsonl"), TRANSCRIPT).unwrap();
+        let previous = env::var_os("CLAUDE_CONFIG_DIR");
+        env::set_var("CLAUDE_CONFIG_DIR", directory.path());
+        let found = find_transcript("abc-123");
+        let escaped = find_transcript("../projects/-work-app/abc-123");
+        let missing = find_transcript("other");
+        match previous { Some(value) => env::set_var("CLAUDE_CONFIG_DIR", value), None => env::remove_var("CLAUDE_CONFIG_DIR") }
+        assert_eq!(found, Some(project.join("abc-123.jsonl")));
+        assert_eq!((escaped, missing), (None, None));
     }
 
     #[test]

@@ -47,6 +47,13 @@ fn main() {
         Some("status") => println!("{}", run_control(claude_code::Control::Status, config_path.as_deref(), &config)),
         Some("stats") => println!("{}", run_control(claude_code::Control::Stats, config_path.as_deref(), &config)),
         Some("hook") => command_hook(&args, config),
+        Some("decide") => command_decide(config),
+        Some("choice") => command_choice(&args, &config),
+        Some("panel") => print_json(control::panel(&config, config_path.as_deref())),
+        Some("forget") => match control::forget(args.get(1).map(String::as_str).filter(|key| !key.starts_with("--"))) {
+            Ok(count) => print_json(json!({ "forgotten": count })),
+            Err(error) => print_json(json!({ "forgotten": 0, "error": error })),
+        },
         _ => command_event(config),
     }
 }
@@ -64,6 +71,7 @@ fn print_help() {
     println!("  gateway                                               Start the optional routing gateway");
     println!("  toggle [on|off]                                       Turn routing on or off (also /s1router_toggle)");
     println!("  status | stats                                        Show routing status or usage stats");
+    println!("  decide | choice | panel | forget [KEY]                Used by the Claude Code mod (JSON)");
     println!("  prices [--refresh]                                    Show rule target prices (LiteLLM table)");
     println!("  benchmark                                             Run a local routing benchmark");
     println!("  <no command>                                          Read a normalized event from stdin");
@@ -391,6 +399,8 @@ fn command_hook(args: &[String], config: Config) {
             return;
         }
         let session = payload.get("session_id").and_then(Value::as_str).unwrap_or_default().to_string();
+        // The mod routes this session itself.
+        if claude_code::mod_active(&session) { print_json(json!({})); return; }
         // Slash commands such as /model do not consume the held prompt.
         if !prompt.trim_start().starts_with('/') {
             if let Some(held) = claude_code::take_held(&session) {
@@ -415,6 +425,34 @@ fn command_hook(args: &[String], config: Config) {
         .then(|| claude_code::ask(&decision, &event)).flatten();
     print_json(asked.unwrap_or_else(|| adapters::translate_hook_decision(host, &decision, &event)));
     if exit_with(exit) != 0 { std::process::exit(exit); }
+}
+
+/// The Claude Code mod's decision: a hook-shaped payload (`session_id`,
+/// `cwd`, `prompt`, plus the session's `model`) on stdin, the decision as
+/// `claude_code::mod_decision` shapes it on stdout. Always exits 0: the mod
+/// keeps the current model on anything it cannot read.
+fn command_decide(config: Config) {
+    let (bytes, timed_out) = read_stdin(config.timeouts.hook_ms);
+    let mut payload: Value = if timed_out { Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(Value::Null) };
+    if !payload.is_object() { print_json(json!({ "action": "none", "record": false, "code": "malformed_event", "message": "the mod sent no JSON object" })); return; }
+    if payload.get("transcript_path").is_none() {
+        if let Some(path) = payload.get("session_id").and_then(Value::as_str).and_then(claude_code::find_transcript) { payload["transcript_path"] = json!(path); }
+    }
+    let event = adapters::normalize(Host::ClaudeCode, payload, env::current_dir().ok().and_then(|path| path.to_str().map(str::to_owned)));
+    let provider = build_provider(&config);
+    let decision = process_event_safe(&event, &config, provider.as_ref());
+    record_decision(&decision, &event, &config);
+    print_json(claude_code::mod_decision(&decision, &event, system1router_core::prices::load().as_ref(), control::remembered));
+}
+
+/// Records the answer the mod got: `choice --current M --suggested M
+/// [--variant V] --accept yes|no [--remember]`.
+fn command_choice(args: &[String], config: &Config) {
+    let (Some(current), Some(suggested)) = (argument(args, "--current"), argument(args, "--suggested")) else { print_json(json!({ "recorded": false, "error": "--current and --suggested are required" })); return; };
+    let accepted = argument(args, "--accept") == Some("yes");
+    system1router_core::telemetry::record_choice(config, "claude-code", Some(if accepted { suggested } else { current }), suggested, accepted);
+    let remembered = args.iter().any(|arg| arg == "--remember").then(|| control::remember(&control::model_label("anthropic", current, None), &control::model_label("anthropic", suggested, argument(args, "--variant")), accepted));
+    match remembered { Some(Err(error)) => print_json(json!({ "recorded": true, "remembered": false, "error": error })), remembered => print_json(json!({ "recorded": true, "remembered": remembered.is_some() })) }
 }
 
 fn command_event(config: Config) { let (bytes, timed_out) = read_stdin(config.timeouts.hook_ms); if timed_out { print_json(bypass("timeout", "event input timed out", "unknown".into())); std::process::exit(EXIT_TIMEOUT); } let event: system1router_core::protocol::NormalizedEvent = match serde_json::from_slice(&bytes) { Ok(event) => event, Err(error) => { eprintln!("system1router: malformed event: {error}"); print_json(bypass("malformed_event", "event was not valid normalized JSON", "unknown".into())); std::process::exit(EXIT_MALFORMED_EVENT); } }; let provider = build_provider(&config); let decision = process_event_safe(&event, &config, provider.as_ref()); record_decision(&decision, &event, &config); let exit = if decision.diagnostic.code == "unsupported_version" { EXIT_UNSUPPORTED_VERSION } else if decision.diagnostic.code == "internal_error" { EXIT_INTERNAL_ERROR } else { 0 }; print_json(serde_json::to_value(decision).unwrap_or_else(|_| json!({ "outcome": "bypass" }))); if exit != 0 { std::process::exit(exit); } }
