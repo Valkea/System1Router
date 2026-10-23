@@ -1,17 +1,23 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, PromptOrigin, Register, TurnStepChunk } from 'claude-code'
+import type { EngineInterface, PromptOrigin, Register, TurnStepChunk, TurnStepInput } from 'claude-code'
 
-import type { Effort, Panel, Routed } from '../types'
+import type { Effort, Panel, Routed, TurnCost } from '../types'
 
 // System1Router for Claude Code. The native `system1router` binary classifies
-// each typed prompt (`decide`); when it suggests another model the person
-// chooses in a native dialog, and every model request of that turn is sent to
-// the chosen model (`turn.step`). The session's own model is never changed.
+// each typed prompt (`decide`). With `routing.swap: "model"` it may suggest
+// another model: the person chooses in a native dialog, and every model
+// request of that turn is sent to the chosen model (`turn.step`). With
+// `routing.swap: "effort"` it may suggest another effort for the same model:
+// once chosen, the main loop's requests carry that effort until the router
+// picks another, since every change re-writes the cached conversation. The
+// session's own model and effort settings are never changed.
 
 const PANE = 's1router'
 const routed = atom({ plugin: 'system1router', key: 'routed' } as const, [])
 const panel = atom({ plugin: 'system1router', key: 'panel' } as const, null)
 const problem = atom({ plugin: 'system1router', key: 'problem' } as const, null)
+const effortState = atom({ plugin: 'system1router', key: 'effort' } as const, { applied: null, base: null, paused: false })
+const costs = atom({ plugin: 'system1router', key: 'costs' } as const, [])
 
 const EFFORTS: readonly string[] = ['low', 'medium', 'high', 'xhigh', 'max']
 const HISTORY = 30
@@ -20,7 +26,13 @@ const HISTORY = 30
 type Decision = {
   action: 'ask' | 'switch' | 'keep' | 'none'
   record: boolean
+  /** `effort` keeps the model and changes its effort. */
+  kind?: 'model' | 'effort'
   current?: string | null
+  /** The effort the mod reported (`effort` in its stdin). */
+  currentEffort?: string | null
+  /** The effort suggested, also when a warm cache holds it back. */
+  effort?: string | null
   model?: string
   /** Ids the API knows for `model`, best first (`claude_code::model_ids`). */
   modelIds?: string[]
@@ -50,8 +62,16 @@ function typed(origin: PromptOrigin): boolean {
   return origin.kind === 'composer' || origin.kind === 'bridge' || origin.kind === 'sdk' || (origin.kind === 'plugin' && origin.asUser === true)
 }
 
+function asEffort(value: unknown): Effort | null {
+  return typeof value === 'string' && EFFORTS.includes(value) ? (value as Effort) : null
+}
+
 function idle(decision: Decision): string {
   if (decision.code === 'disabled') return 'S1R off'
+  if (decision.routingClass && (decision.code === 'effort_unchanged' || (decision.code === 'cache_sticky' && decision.effort))) {
+    const now = `${decision.currentEffort ?? 'session'} effort`
+    return `S1R · ${decision.routingClass} · ${now}${decision.code === 'cache_sticky' ? ` kept for the cache (not ${decision.effort})` : ''}`
+  }
   const current = decision.current ? short(decision.current) : 'current model'
   if (decision.routingClass) return `S1R · ${decision.routingClass}${decision.code === 'cache_sticky' ? ' · cache kept' : ''} · ${current}`
   return 'S1R on'
@@ -106,6 +126,36 @@ async function forget($: EngineInterface, key?: string): Promise<void> {
   await refresh($)
 }
 
+/** Pauses or resumes automatic effort for this session. */
+async function pauseEffort($: EngineInterface): Promise<void> {
+  const state = await update($, effortState, s => ({ ...s, paused: !s.paused }))
+  $.ui.status(state.paused ? 'S1R · automatic effort paused' : 'S1R · automatic effort on')
+}
+
+/** Goes back to the session's own effort until the router picks another. */
+async function dropEffort($: EngineInterface): Promise<void> {
+  const state = await update($, effortState, s => ({ ...s, applied: null }))
+  $.ui.status(`S1R · ${state.base ?? 'session'} effort`)
+}
+
+/**
+ * The effort the main loop's request is sent with, or undefined for the
+ * session's own. A change of the session's own effort while the router holds
+ * one is the person's `/effort` (or `/model`): it wins, and automatic effort
+ * pauses for the session.
+ */
+async function steer($: EngineInterface, e: TurnStepInput): Promise<Effort | undefined> {
+  const observed = asEffort(e.effort)
+  // A model without effort takes none.
+  if (!observed) return undefined
+  const state = await read($, effortState)
+  if (state.base === observed) return state.applied ?? undefined
+  const manual = state.base !== null && state.applied !== null
+  await update($, effortState, s => ({ applied: manual ? null : s.applied, base: observed, paused: s.paused || manual }))
+  if (manual) $.ui.toast(`S1R: the session's effort is now ${observed}; automatic effort is paused for this session (/s1router resumes it)`)
+  return manual ? undefined : (state.applied ?? undefined)
+}
+
 /** Asks when needed and returns the model the turn should use, if another. */
 async function settle($: EngineInterface, decision: Decision): Promise<Choice | undefined> {
   const { model, current } = decision
@@ -113,8 +163,15 @@ async function settle($: EngineInterface, decision: Decision): Promise<Choice | 
     $.ui.status(idle(decision))
     return undefined
   }
-  const effort = decision.variant && EFFORTS.includes(decision.variant) ? (decision.variant as Effort) : null
-  const target = effort ? `${model} · ${effort}` : model
+  const effort = asEffort(decision.variant)
+  const isEffort = decision.kind === 'effort'
+  if (isEffort && !effort) {
+    $.ui.status(idle(decision))
+    return undefined
+  }
+  const from = asEffort(decision.currentEffort)
+  const was = from ?? 'session'
+  const target = isEffort ? `${effort} effort` : effort ? `${model} · ${effort}` : model
   let accept = decision.action === 'switch'
   let remember = false
   let how: Routed['how'] = decision.remembered == null ? 'auto' : 'remembered'
@@ -124,14 +181,16 @@ async function settle($: EngineInterface, decision: Decision): Promise<Choice | 
       $.ui.status(idle(decision))
       return undefined
     }
-    const labels = [`Use ${target}`, `Keep ${short(current)}`, `Always switch to ${model}`, `Never switch to ${model}`]
+    const labels = isEffort
+      ? [`Use ${target}`, `Keep ${was} effort`, `Always ${was} → ${effort}`, `Never ${was} → ${effort}`]
+      : [`Use ${target}`, `Keep ${short(current)}`, `Always switch to ${model}`, `Never switch to ${model}`]
     const percent = Math.round((decision.confidence ?? 0) * 100)
     const reason = (decision.reason ?? '').replace(/\.\s*$/, '')
+    const question = isEffort
+      ? `Think at ${effort} effort instead of ${from ?? "the session's"}? Same model; the change re-writes the cached conversation once.`
+      : `Use ${target} for this turn instead of ${short(current)}?`
     try {
-      const answer = await $.ui.ask(
-        `S1R · ${decision.routingClass} (${percent}%)${reason ? `: ${reason}` : ''}. Use ${target} for this turn instead of ${short(current)}?`,
-        { header: 'S1R', options: labels },
-      )
+      const answer = await $.ui.ask(`S1R · ${decision.routingClass} (${percent}%)${reason ? `: ${reason}` : ''}. ${question}`, { header: 'S1R', options: labels })
       accept = answer === labels[0] || answer === labels[2]
       remember = answer === labels[2] || answer === labels[3]
       how = 'asked'
@@ -142,12 +201,25 @@ async function settle($: EngineInterface, decision: Decision): Promise<Choice | 
   }
   if (decision.record) {
     const variant = decision.variant ? ['--variant', decision.variant] : []
-    await run($, ['choice', '--current', current, '--suggested', model, ...variant, '--accept', accept ? 'yes' : 'no', ...(remember ? ['--remember'] : [])])
+    const before = isEffort && from ? ['--current-variant', from] : []
+    await run($, ['choice', '--current', current, ...before, '--suggested', model, ...variant, '--accept', accept ? 'yes' : 'no', ...(remember ? ['--remember'] : [])])
   }
-  const entry: Routed = { routingClass: decision.routingClass ?? 'unknown', confidence: decision.confidence ?? 0, current, model, effort, outcome: accept ? 'switched' : 'kept', how }
+  const entry: Routed = { kind: isEffort ? 'effort' : 'model', routingClass: decision.routingClass ?? 'unknown', confidence: decision.confidence ?? 0, current, model, effort, from, outcome: accept ? 'switched' : 'kept', how }
   await update($, routed, list => [...list, entry].slice(-HISTORY))
-  $.ui.status(accept ? `S1R · ${entry.routingClass} → ${target}` : `S1R · ${entry.routingClass} · kept ${short(current)}`)
+  $.ui.status(accept ? `S1R · ${entry.routingClass} → ${target}` : `S1R · ${entry.routingClass} · kept ${isEffort ? `${was} effort` : short(current)}`)
+  if (isEffort) {
+    // Held for the following turns too: every change costs a cache re-write.
+    if (accept) await update($, effortState, s => ({ ...s, applied: effort }))
+    return undefined
+  }
   return accept ? { model, ids: decision.modelIds?.length ? decision.modelIds : [model], current, effort } : undefined
+}
+
+/** The share of a turn's prompt the cache served, over some turns. */
+export function cacheShare(list: readonly TurnCost[]): string {
+  const read = list.reduce((sum, cost) => sum + cost.cacheRead, 0)
+  const total = list.reduce((sum, cost) => sum + cost.cacheRead + cost.cacheWrite + cost.input, 0)
+  return total > 0 ? `${Math.round((100 * read) / total)}%` : '—'
 }
 
 export const register: Register = (on, options) => {
@@ -158,6 +230,10 @@ export const register: Register = (on, options) => {
   const turns = new Map<string, Choice>()
   // Ids the API refused in this process, skipped from then on.
   const rejected = new Set<string>()
+  // The effort each main-loop turn was sent with, and when the last one
+  // ended: past the prompt cache's lifetime a change loses nothing.
+  const sent = new Map<string, Effort | null>()
+  let lastEnd: number | undefined
 
   on('session.start', async ($, e, next) => {
     // The command hook of this session, if installed too, leaves routing to the mod.
@@ -182,10 +258,17 @@ export const register: Register = (on, options) => {
   on('prompt.submit', async ($, e, next) => {
     pending = undefined
     if (!typed(e.origin) || e.turnId !== undefined || !e.text.trim() || e.text.trimStart().startsWith('/')) return next(e)
+    const [data, held] = await Promise.all([read($, panel), read($, effortState)])
+    if (data?.status.swap === 'effort' && held.paused) {
+      $.ui.status('S1R · automatic effort paused')
+      return next(e)
+    }
     $.ui.status('S1R · classifying…')
     try {
-      const [session_id, cwd, model] = await Promise.all([$.session.id(), $.session.cwd(), $.session.model()])
-      const stdin = JSON.stringify({ session_id, cwd, model, prompt: e.text, hook_event_name: 'UserPromptSubmit' })
+      const [session_id, cwd, model, now] = await Promise.all([$.session.id(), $.session.cwd(), $.session.model(), $.clock.now()])
+      const effort = held.applied ?? held.base ?? undefined
+      const idle_ms = lastEnd === undefined ? undefined : Math.max(0, now - lastEnd)
+      const stdin = JSON.stringify({ session_id, cwd, model, prompt: e.text, hook_event_name: 'UserPromptSubmit', effort, idle_ms })
       pending = await settle($, JSON.parse(await run($, ['decide'], stdin)) as Decision)
     } catch (error) {
       // Fail open: the prompt goes on with the session's model.
@@ -202,15 +285,19 @@ export const register: Register = (on, options) => {
   })
 
   on('turn.step', async function* ($, e, next) {
-    // Subagents keep their own models.
-    const choice = e.agentId === undefined ? turns.get(e.turnId) : undefined
-    if (!choice || sameModel(e.model, choice.model)) return yield* next(e)
+    // Subagents keep their own model and effort.
+    if (e.agentId !== undefined) return yield* next(e)
+    const effort = await steer($, e)
+    if (!sent.has(e.turnId)) sent.set(e.turnId, effort ?? asEffort(e.effort))
+    const step = effort && effort !== e.effort ? { ...e, effort } : e
+    const choice = turns.get(e.turnId)
+    if (!choice || sameModel(e.model, choice.model)) return yield* next(step)
     for (const id of choice.ids.filter(id => !rejected.has(id))) {
       // An id the API does not know ends the stream with nothing but engine
       // items, so they are held until the response shows content.
       const held: TurnStepChunk[] = []
       let isLive = false
-      const stream = next({ ...e, model: id, ...(choice.effort ? { effort: choice.effort } : {}) })
+      const stream = next({ ...step, model: id, ...(choice.effort ? { effort: choice.effort } : {}) })
       while (true) {
         const item = await stream.next()
         if (item.done) {
@@ -233,11 +320,23 @@ export const register: Register = (on, options) => {
     $.ui.toast(`S1R: ${choice.ids.join(', ')} not available; this turn stays on ${short(choice.current)}`)
     $.ui.status(`S1R · ${choice.model} unavailable · ${short(choice.current)}`)
     turns.delete(e.turnId)
-    return yield* next(e)
+    return yield* next(step)
   })
 
-  on('turn.complete', ($, e, next) => {
+  on('turn.complete', async ($, e, next) => {
     turns.delete(e.turnId)
+    if (e.agentId === undefined) {
+      lastEnd = await $.clock.now()
+      const effort = sent.get(e.turnId) ?? null
+      sent.delete(e.turnId)
+      const usage = e.usage
+      if (usage) {
+        await update($, costs, list => {
+          const cost: TurnCost = { effort, switched: list.length > 0 && list[list.length - 1]?.effort !== effort, cacheRead: usage.cache_read_input_tokens, cacheWrite: usage.cache_creation_input_tokens, input: usage.input_tokens, output: usage.output_tokens }
+          return [...list, cost].slice(-HISTORY)
+        })
+      }
+    }
     return next(e)
   })
 
@@ -259,6 +358,8 @@ export const register: Register = (on, options) => {
     const data = await read($, panel)
     const list = await read($, routed)
     const failure = await read($, problem)
+    const held = await read($, effortState)
+    const spent = await read($, costs)
     const width = Math.max(30, e.props.bodyColumns ?? 60)
     // The terminal reports clicks only in its fullscreen layout; elsewhere the
     // pane is used from the keyboard once it holds the focus.
@@ -278,6 +379,11 @@ export const register: Register = (on, options) => {
     }
 
     const { status, stats } = data
+    const isEffort = status.swap === 'effort'
+    // Effort per class, grouped: `low question simple · medium …`.
+    const levels = EFFORTS.map(level => [level, Object.entries(status.efforts ?? {}).filter(([, value]) => value === level).map(([name]) => name.replace('_', ' '))] as const).filter(([, names]) => names.length > 0)
+    const switched = spent.filter(cost => cost.switched)
+    const steady = spent.slice(1).filter(cost => !cost.switched)
     const rate = stats.answered > 0 ? `${Math.round((100 * stats.accepted) / stats.answered)}%` : '—'
     const models = Object.entries(stats.models).sort((a, b) => b[1] - a[1]).slice(0, 6)
     const top = models[0]?.[1] ?? 1
@@ -288,6 +394,7 @@ export const register: Register = (on, options) => {
       <Box flexDirection="column">
         <Box flexDirection="row">
           <Text bold color={status.enabled ? 'green' : 'yellow'}>Routing {status.enabled ? 'ON' : 'OFF'} </Text>
+          <Text dimColor>· {isEffort ? 'effort' : 'model'} swap </Text>
           {/* plain: the terminal draws the hotkey beside the label (`t: Turn off`) */}
           <Button key="toggle" hotkey="t" plain autoFocus label={status.enabled ? 'Turn off' : 'Turn on'} onPress={() => toggle($)} />
           <Text>  </Text>
@@ -301,6 +408,21 @@ export const register: Register = (on, options) => {
         </Text>
         {failure && <Text color="red">{failure}</Text>}
 
+        {isEffort && (
+          <Box marginTop={1} flexDirection="column">
+            <Box flexDirection="row">
+              <Text bold>Effort </Text>
+              <Text color={held.paused ? 'yellow' : 'green'}>{held.paused ? 'paused' : 'auto'}</Text>
+              <Text>{` · now ${held.applied ?? held.base ?? 'session'}${held.applied && held.base && held.applied !== held.base ? ` (session ${held.base})` : ''}  `}</Text>
+              <Button key="pause" hotkey="a" plain label={held.paused ? 'Resume auto' : 'Pause auto'} onPress={() => pauseEffort($)} />
+              {held.applied && <Text>  </Text>}
+              {held.applied && <Button key="drop" hotkey="e" plain label="Session effort" onPress={() => dropEffort($)} />}
+            </Box>
+            <Text dimColor>  {levels.map(([level, names]) => `${level}: ${names.join(', ')}`).join(' · ')}</Text>
+            <Text dimColor>  Cache read after an effort change {cacheShare(switched)} ({switched.length} turns) · otherwise {cacheShare(steady)} ({steady.length})</Text>
+          </Box>
+        )}
+
         <Box marginTop={1} flexDirection="column">
           <Text bold>This session</Text>
           {list.length === 0 && <Text dimColor>  No routed prompt yet.</Text>}
@@ -308,7 +430,9 @@ export const register: Register = (on, options) => {
             <Text>
               {'  '}
               <Text color={item.outcome === 'switched' ? 'green' : undefined}>{item.outcome === 'switched' ? '→' : '·'}</Text>
-              {` ${item.routingClass} ${Math.round(item.confidence * 100)}%  ${short(item.current)} → ${item.model}${item.effort ? ` · ${item.effort}` : ''}  `}
+              {item.kind === 'effort'
+                ? ` ${item.routingClass} ${Math.round(item.confidence * 100)}%  effort ${item.from ?? 'session'} → ${item.effort}  `
+                : ` ${item.routingClass} ${Math.round(item.confidence * 100)}%  ${short(item.current)} → ${item.model}${item.effort ? ` · ${item.effort}` : ''}  `}
               <Text dimColor>{item.outcome} ({item.how})</Text>
             </Text>
           ))}
@@ -317,6 +441,7 @@ export const register: Register = (on, options) => {
         <Box marginTop={1} flexDirection="column">
           <Text bold>All hosts · {stats.calls} prompts</Text>
           <Text dimColor>  {stats.answered} answered · {stats.accepted} accepted ({rate}) · {stats.advised} advisory</Text>
+          {Object.keys(stats.efforts ?? {}).length > 0 && <Text dimColor>  By effort: {Object.entries(stats.efforts).map(([effort, count]) => `${effort} ${count}`).join(' · ')}</Text>}
           {models.map(([name, count]) => (
             <Text>
               {'  '}{name.length > nameWidth ? `${name.slice(0, nameWidth - 1)}…` : name.padEnd(nameWidth)}{' '}

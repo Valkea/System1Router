@@ -3,8 +3,8 @@ import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 const PANEL = {
-  status: { enabled: true, provider: 'jev', providerReady: true, rules: 12, claudeCodeRules: 6, consentMode: 'interactive', configPath: '/c/config.json', providerLog: '/s/provider-debug.jsonl' },
-  stats: { calls: 10, models: { 'anthropic/claude-sonnet-5-5': 7, 'anthropic/opus': 3 }, answered: 4, accepted: 3, advised: 1, byHost: { 'claude-code': 10 } },
+  status: { enabled: true, provider: 'jev', providerReady: true, rules: 12, claudeCodeRules: 6, consentMode: 'interactive', swap: 'model', efforts: { question_simple: 'low', code_hard: 'xhigh' }, configPath: '/c/config.json', providerLog: '/s/provider-debug.jsonl' },
+  stats: { calls: 10, models: { 'anthropic/claude-sonnet-5-5': 7, 'anthropic/opus': 3 }, answered: 4, accepted: 3, advised: 1, byHost: { 'claude-code': 10 }, efforts: {} },
   preferences: [{ key: 'anthropic/claude-sonnet-5-5 → anthropic/haiku', accept: false, current: 'anthropic/claude-sonnet-5-5', suggested: 'anthropic/haiku', createdAt: 1 }],
 }
 
@@ -13,8 +13,20 @@ const ASK = {
   routingClass: 'code_hard', confidence: 0.8, reason: 'Complex or high-risk change', code: 'consent_requested',
 }
 
+/** An effort swap: same model, another effort. */
+const EFFORT = {
+  action: 'ask', record: true, kind: 'effort', current: 'claude-sonnet-5-5', currentEffort: null, model: 'claude-sonnet-5-5', modelIds: ['claude-sonnet-5-5'], variant: 'xhigh', effort: 'xhigh', remembered: null,
+  routingClass: 'code_hard', confidence: 0.8, reason: 'code_hard work takes xhigh effort', code: 'consent_requested',
+}
+
+const UNCHANGED = { action: 'none', record: false, current: 'claude-sonnet-5-5', currentEffort: 'xhigh', routingClass: 'code_moderate', code: 'effort_unchanged' }
+
 type Fake = {
   decision: object
+  /** What `system1router panel` answers. */
+  panel: object
+  /** What `$.clock.now()` answers. */
+  now: number
   /** The label picked in the dialog; undefined dismisses it. */
   answer: string | undefined
   calls: string[][]
@@ -33,18 +45,20 @@ type Fake = {
 
 /** The engine beneath the mod: the binary, the session, the dialog and the turn. */
 function engine(on: On, decision: object, answer?: string): Fake {
-  const state: Fake = { decision, answer, calls: [], stdin: [], sent: { model: '', effort: undefined }, tried: [], unknown: [], toasts: [], env: undefined, panes: [] }
+  const state: Fake = { decision, panel: PANEL, now: 1_000, answer, calls: [], stdin: [], sent: { model: '', effort: undefined }, tried: [], unknown: [], toasts: [], env: undefined, panes: [] }
   on('process.run', ($, e) => {
     state.calls.push([...e.argv.slice(1)])
     if (e.init?.stdin) state.stdin.push(e.init.stdin)
     const command = e.argv[1]
-    const stdout = command === 'decide' ? JSON.stringify(state.decision) : command === 'panel' ? JSON.stringify(PANEL) : command === 'choice' ? '{"recorded":true}' : 'ok'
+    const stdout = command === 'decide' ? JSON.stringify(state.decision) : command === 'panel' ? JSON.stringify(state.panel) : command === 'choice' ? '{"recorded":true}' : 'ok'
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('session.id', () => ({ value: 'session-1' }))
   on('session.cwd', () => ({ value: '/work/app' }))
   on('session.model', () => ({ value: 'claude-sonnet-5-5' }))
   on('session.surfaces', () => ({ value: ['terminal'] }))
+  on('clock.now', () => ({ value: state.now }))
+  on('turn.complete', ($, e) => ({ text: e.answer }))
   on('ui.status', () => ({ value: undefined }))
   on('env.set', ($, e) => {
     state.env = e.value
@@ -81,11 +95,16 @@ function engine(on: On, decision: object, answer?: string): Fake {
 }
 
 /** Submits a typed prompt and runs one model request of its turn; returns where it was sent. */
-async function turn($: Engine, state: Fake, text = 'refactor the parser', turnId = 'turn-1'): Promise<Fake['sent']> {
+async function turn($: Engine, state: Fake, text = 'refactor the parser', turnId = 'turn-1', effort = 'medium'): Promise<Fake['sent']> {
   await $.prompt.submit({ text, origin: { kind: 'composer' }, wait: false })
   await $.turn.start({ text, turnId })
-  for await (const _ of $.turn.step({ turnId, index: 0, model: 'claude-sonnet-5-5', effort: 'medium', messageCount: 1 })) { /* drain */ }
+  for await (const _ of $.turn.step({ turnId, index: 0, model: 'claude-sonnet-5-5', effort: effort as 'medium', messageCount: 1 })) { /* drain */ }
   return state.sent
+}
+
+/** Ends a main-loop turn with what its requests cost. */
+async function complete($: Engine, turnId: string, cacheRead: number, cacheWrite: number): Promise<void> {
+  await $.turn.complete({ turnId, answer: 'ok', durationMs: 1, isAborted: false, reason: 'answer', usage: { model: 'claude-sonnet-5-5', input_tokens: 0, output_tokens: 10, cache_read_input_tokens: cacheRead, cache_creation_input_tokens: cacheWrite } })
 }
 
 test('an accepted suggestion sends the turn to that model and effort', async ($, on) => {
@@ -192,5 +211,74 @@ test('an unfocused pane on the terminal main screen says how to reach its button
     viewport: { columns: 100, rows: 40, isFullscreen: false },
   })
   expect(await ui.find({ text: /ctrl\+x tab to use the buttons/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('an accepted effort keeps the model and holds for the following turns', async ($, on) => {
+  const state = engine(on, EFFORT, 'Use xhigh effort')
+  expect(await turn($, state, 'fix the race', 'turn-1')).toEqual({ model: 'claude-sonnet-5-5', effort: 'xhigh' })
+  expect(state.calls).toContainEqual(['choice', '--current', 'claude-sonnet-5-5', '--suggested', 'claude-sonnet-5-5', '--variant', 'xhigh', '--accept', 'yes'])
+
+  state.decision = UNCHANGED
+  state.now = 5_000
+  await complete($, 'turn-1', 0, 1_000)
+  expect(await turn($, state, 'and the other one', 'turn-2')).toEqual({ model: 'claude-sonnet-5-5', effort: 'xhigh' })
+  const stdin = JSON.parse(state.stdin.at(-1) ?? '{}')
+  expect([stdin.effort, stdin.idle_ms]).toEqual(['xhigh', 0])
+
+  // Subagents keep their own effort.
+  for await (const _ of $.turn.step({ turnId: 'turn-2', index: 1, model: 'claude-sonnet-5-5', effort: 'medium', messageCount: 3, agentId: 'agent-1' })) { /* drain */ }
+  expect(state.sent.effort).toBe('medium')
+})
+
+test('keeping the effort asks with the effort wording and changes nothing', async ($, on) => {
+  const state = engine(on, { ...EFFORT, currentEffort: 'medium' }, 'Keep medium effort')
+  expect(await turn($, state)).toEqual({ model: 'claude-sonnet-5-5', effort: 'medium' })
+  expect(state.calls.find(call => call[0] === 'choice')).toEqual(['choice', '--current', 'claude-sonnet-5-5', '--current-variant', 'medium', '--suggested', 'claude-sonnet-5-5', '--variant', 'xhigh', '--accept', 'no'])
+})
+
+test("the session's own /effort wins and pauses automatic effort", async ($, on) => {
+  const state = engine(on, EFFORT, 'Use xhigh effort')
+  state.panel = { ...PANEL, status: { ...PANEL.status, swap: 'effort' } }
+  await $.command.run({ command: 's1router', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } })
+  expect((await turn($, state, 'fix the race', 'turn-1')).effort).toBe('xhigh')
+  // The person ran /effort high: the session's requests now name high.
+  expect((await turn($, state, 'next', 'turn-2', 'high')).effort).toBe('high')
+  expect(state.toasts.at(-1)).toContain('automatic effort is paused')
+  const decided = state.calls.filter(call => call[0] === 'decide').length
+  expect((await turn($, state, 'again', 'turn-3', 'high')).effort).toBe('high')
+  expect(state.calls.filter(call => call[0] === 'decide')).toHaveLength(decided)
+})
+
+test('the dashboard shows the effort, what a change did to the cache, and resumes', async ($, on) => {
+  const state = engine(on, UNCHANGED)
+  state.panel = { ...PANEL, status: { ...PANEL.status, swap: 'effort' }, stats: { ...PANEL.stats, efforts: { xhigh: 2 } } }
+  await turn($, state, 'read the code', 'turn-1')
+  await complete($, 'turn-1', 0, 1_000)
+  state.decision = EFFORT
+  state.answer = 'Use xhigh effort'
+  await turn($, state, 'fix the race', 'turn-2')
+  await complete($, 'turn-2', 100, 900)
+  state.decision = UNCHANGED
+  await turn($, state, 'and the test', 'turn-3')
+  await complete($, 'turn-3', 950, 50)
+
+  await $.command.run({ command: 's1router', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } })
+  const ui = await $.ui.mount({
+    plugin: 'system1router', surface: 'terminal', component: 'Pane', requestId: 's1router',
+    props: { title: 'System1Router', isFocused: true, bodyColumns: 120, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} },
+  })
+  expect(await ui.find({ text: /effort swap/ })).toBeDefined()
+  expect(await ui.find({ text: /now xhigh \(session medium\)/ })).toBeDefined()
+  expect(await ui.find({ text: /low: question simple · xhigh: code hard/ })).toBeDefined()
+  expect(await ui.find({ text: /after an effort change 10% \(1 turns\) · otherwise 95% \(1\)/ })).toBeDefined()
+  expect(await ui.find({ text: /effort session → xhigh/ })).toBeDefined()
+  expect(await ui.find({ text: /By effort: xhigh 2/ })).toBeDefined()
+  await ui.press({ key: 'drop' })
+  expect((await turn($, state, 'small fix', 'turn-4')).effort).toBe('medium')
+  await ui.press({ key: 'pause' })
+  const decided = state.calls.filter(call => call[0] === 'decide').length
+  await turn($, state, 'paused', 'turn-5')
+  expect(state.calls.filter(call => call[0] === 'decide')).toHaveLength(decided)
   await ui.unmount()
 })
