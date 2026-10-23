@@ -37,11 +37,34 @@ Rules without `host` apply to every host, but a host that exposes no model catal
 
 Run `system1router doctor` after editing: `problems` lists what prevents routing (disabled, unusable provider, no rule for an installed host) and `advice` flags price inversions, such as a simple class routed to a pricier model than a hard class.
 
+## Model swap or effort swap
+
+`routing.swap` chooses what a decision changes:
+
+- `model` (default): a matching rule switches to its target model, as described above. A different model cannot reuse the conversation's prompt cache.
+- `effort`: rules are not used. The current model stays and its reasoning effort is set to the level `effort.levels` gives the class (Claude Code `/effort`, an OpenCode variant):
+
+```json
+{
+  "routing": { "enabled": true, "swap": "effort" },
+  "consent": { "mode": "always-accept" },
+  "effort": {
+    "levels": { "question_simple": "low", "question_moderate": "medium", "question_hard": "high", "code_simple": "medium", "code_moderate": "high", "code_hard": "xhigh" },
+    "cacheGuardTokens": 50000,
+    "cacheTtlMs": 300000
+  }
+}
+```
+
+The levels shown are the defaults; a class left out keeps its default. Efforts are ordered `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. A host with a catalog (OpenCode) only gets the model's own variants: the nearest one to the level, ties going to more effort; a model without variants is left alone. Claude Code silently lowers an effort the model does not take.
+
+An effort swap is not free. The Anthropic and OpenAI APIs render the effort ahead of the conversation, so a change re-writes the cached conversation on the next request (the system prompt and tools may stay cached, depending on the model). So with `routing.cacheAware`, a lower effort waits while the context holds at least `effort.cacheGuardTokens` tokens and the last response is younger than `effort.cacheTtlMs`; a higher effort always applies. A held effort is reported as `cache_sticky`, and a class that keeps the current effort as `effort_unchanged`. Set `cacheGuardTokens` to `0` to never wait. `consent.mode` applies as for models: `interactive` asks, `always-accept` applies the effort without asking.
+
 ## Accuracy and efficiency
 
 - **Class selection** (`routing.classSelection`, default `median`). The six classes are two ordinal scales. When the provider returns probabilities, the router picks code vs question by total probability mass and the difficulty tier by the median of that distribution, instead of the single top class. This avoids choosing *simple* when most of the mass says *moderate or harder*. Use `argmax` to keep the provider's top choice.
 - **What the classifier sees.** The Jev `state` is compact labelled text (files, tools, recent conversation, then the current request), with empty fields omitted. The default criteria are the canonical class definitions, and the instruction tells the classifier that `code_*` means the assistant is expected to change files or run commands.
-- **Skipped calls.** The provider is not called for empty prompts or Claude Code slash commands, or when no applicable rule targets a model other than the current one.
+- **Skipped calls.** The provider is not called for empty prompts or Claude Code slash commands, or when no applicable rule targets a model other than the current one (with the effort swap: when every class keeps the current effort).
 - **Cache-aware switching** (`routing.cacheAware`, default `true`). Changing model discards the conversation's prompt cache. When a suggestion is cheaper per token but re-reading the cached context at its full input price would cost more than staying on the current model at the cached price, the router keeps the current model (`cache-sticky` in telemetry). Upgrades are never suppressed, and nothing is decided without prices for both models.
 - **Prices** (`prices.enabled`, `prices.url`). Hosts often report no price (Claude Code) or zero (subscription models in OpenCode). The router then uses the [LiteLLM price table](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json), cached trimmed in `~/.local/state/system1router/model-prices.json` and refreshed by a detached background process when older than 7 days, so a request never waits for the download. `system1router prices [--refresh]` prints what each rule target costs. For subscription plans these are API list prices, used as a proxy for relative cost.
 

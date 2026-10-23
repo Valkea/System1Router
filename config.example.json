@@ -5,7 +5,20 @@
     "failOpen": true,
     "minConfidence": 0.0,
     "classSelection": "median",
-    "cacheAware": true
+    "cacheAware": true,
+    "swap": "effort"
+  },
+  "effort": {
+    "levels": {
+      "question_simple": "low",
+      "question_moderate": "medium",
+      "question_hard": "high",
+      "code_simple": "medium",
+      "code_moderate": "high",
+      "code_hard": "xhigh"
+    },
+    "cacheGuardTokens": 50000,
+    "cacheTtlMs": 300000
   },
   "providers": {
     "selected": "none",

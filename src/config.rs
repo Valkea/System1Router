@@ -371,6 +371,7 @@ impl Config {
             "provider": self.providers.selected,
             "jevConfigured": (self.providers.jev.endpoint.is_some() || self.providers.jev.base_url.is_some() || env::var("JEV_BASE_URL").is_ok()) && self.providers.jev.credential_env.as_ref().and_then(|k| env::var(k).ok()).is_some_and(|value| !value.trim().is_empty()),
             "layaConfigured": self.providers.laya.command.is_some() || self.providers.laya.endpoint.is_some() || self.providers.laya.base_url.is_some() || env::var("LAYA_BASE_URL").is_ok(),
+            "swap": self.routing.swap,
             "rules": self.rules.len(),
             "gatewayEnabled": self.gateway.enabled,
             "gatewayAllowlistedTargets": self.gateway.upstream_allowlist.len(),

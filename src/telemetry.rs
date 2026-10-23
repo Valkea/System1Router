@@ -26,6 +26,11 @@ pub fn record(decision: &NormalizedDecision, request: &NormalizedEvent, config: 
         Some(ConsentOutcome::KeepCurrentModel) => Some(false),
         _ => None,
     };
+    // The same model at another effort is an effort swap.
+    let current = request.current_model.as_ref();
+    if let Some(rec) = decision.recommendation.as_ref().filter(|rec| rec.model.is_some() && rec.model.as_deref() == current.map(|model| model.model.as_str())) {
+        event.effort = match event.accepted { Some(true) => rec.variant.clone(), Some(false) => current.and_then(|model| model.variant.clone()), None => None };
+    }
     // An advisory acceptance does not imply the host changed its model.
     if decision.outcome == DecisionOutcome::Route && event.accepted == Some(true) {
         event.model = event.suggested_model.clone().or(event.model);

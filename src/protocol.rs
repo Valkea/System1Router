@@ -393,6 +393,9 @@ pub struct RoutingEvent {
     pub suggested_model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accepted: Option<bool>,
+    /// The effort the request runs at, after an answered effort swap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
     #[serde(default)]
     pub debug_capture: Option<Value>,
 }

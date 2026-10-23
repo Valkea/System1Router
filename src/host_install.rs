@@ -372,8 +372,10 @@ pub fn doctor(config: &Config) -> Value {
     if !config.routing.enabled { problems.push("routing is disabled: set routing.enabled to true (or use /s1router_toggle in OpenCode)".into()); }
     let provider_ready = match config.providers.selected.as_str() { "jev" => summary["jevConfigured"] == true, "laya" => summary["layaConfigured"] == true, _ => false };
     if !provider_ready { problems.push(format!("decision provider `{}` is not usable: select jev or laya and set its endpoint/credential (see README)", config.providers.selected)); }
-    if config.rules.is_empty() { problems.push("no routing rules: add one rule per routing class you want to route".into()); }
-    for host in all.into_iter().filter(|host| host_installation_present(*host)) {
+    // The effort swap uses effort.levels, not rules.
+    let swaps_models = config.routing.swap == crate::config::Swap::Model;
+    if swaps_models && config.rules.is_empty() { problems.push("no routing rules: add one rule per routing class you want to route".into()); }
+    for host in all.into_iter().filter(|host| swaps_models && host_installation_present(*host)) {
         if rules_for(host) == 0 { problems.push(format!("{} is installed but no rule applies to it (rules with \"host\": \"{}\" or no host)", host.as_str(), host.as_str())); }
     }
     for rule in config.rules.iter().filter(|rule| rule.host.as_deref().is_some_and(|name| Host::parse(name).is_none())) {
@@ -394,6 +396,7 @@ pub fn doctor(config: &Config) -> Value {
             }
         }
     }
+    if !swaps_models && host_installation_present(Host::ClaudeCode) { advice.push("the effort swap needs the Claude Code mod (claude-code/system1router); the command hook cannot change a turn's effort".into()); }
     json!({ "version": INSTALL_VERSION, "protocolVersion": PROTOCOL_VERSION, "ready": problems.is_empty(), "problems": problems, "advice": advice, "hosts": hosts, "config": summary })
 }
 
@@ -417,6 +420,7 @@ fn write_json(path: &Path, value: &Value) -> Result<(), String> { if let Some(pa
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test] fn the_effort_swap_needs_no_rules() { let mut config = Config::default(); let problems = |config: &Config| doctor(config)["problems"].to_string(); assert!(problems(&config).contains("no routing rules")); config.routing.swap = crate::config::Swap::Effort; assert!(!problems(&config).contains("no routing rules") && !problems(&config).contains("no rule applies")); assert_eq!(doctor(&config)["config"]["swap"], "effort"); }
     #[test] fn installation_is_idempotent_and_preserves_fields() { let directory = tempfile::tempdir().unwrap(); let path = directory.path().join("settings.json"); fs::write(&path, r#"{"other":true}"#).unwrap(); install(Host::ClaudeCode, Some(&path), Some("system1router")).unwrap(); install(Host::ClaudeCode, Some(&path), Some("system1router")).unwrap(); let value: Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap(); assert_eq!(value["other"], true); assert_eq!(value["hooks"]["UserPromptSubmit"].as_array().unwrap().len(), 1); assert!(!value.to_string().contains(OWNER_KEY)); }
 
     #[test]

@@ -27,7 +27,7 @@ cp config.example.json "$HOME/.config/system1router/config.json"
 export SYSTEM1ROUTER_CONFIG="$HOME/.config/system1router/config.json"
 ```
 
-Routing is disabled by default. Set `routing.enabled` to `true` only after a provider and at least one catalog-validated rule are configured. Configuration accepts JSON, or TOML when the file name ends in `.toml`. See `docs/CONFIGURATION.md` for all fields.
+Routing is disabled by default. Set `routing.enabled` to `true` only after a provider and at least one catalog-validated rule are configured. `routing.swap` chooses what routing changes: `model` (default) switches to the model a rule names, `effort` keeps the model and sets the reasoning effort `effort.levels` gives the request's class, with no rules needed (in Claude Code this needs the mod). Configuration accepts JSON, or TOML when the file name ends in `.toml`. See `docs/CONFIGURATION.md` for all fields.
 
 Installing the plugin is intentionally not the same as enabling routing: installation must not change a host’s model or send prompts to a provider before the user configures consent, privacy, provider credentials, and policy. On the first OpenCode message, the plugin displays a one-time status notification explaining that routing is disabled. Run `system1router doctor` to inspect the state, then enable routing after provider setup.
 

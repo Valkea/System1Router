@@ -112,3 +112,20 @@ fn decide_swaps_only_the_effort_and_waits_while_the_cache_is_warm() {
     assert_eq!(panel["preferences"][0]["key"], "anthropic/claude-opus-5-5 (high) → anthropic/claude-opus-5-5 (low)");
     assert_eq!((panel["status"]["swap"].as_str(), panel["status"]["efforts"]["code_hard"].as_str()), (Some("effort"), Some("xhigh")));
 }
+
+#[test]
+fn an_effort_applied_without_asking_is_counted_by_effort() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = directory.path().join("config.json");
+    std::fs::write(&config, r#"{"routing":{"enabled":true,"swap":"effort"},"consent":{"mode":"always-accept"},"providers":{"selected":"jev","jev":{"baseUrl":"http://127.0.0.1:9","credentialEnv":null}}}"#).unwrap();
+    let cli = |arguments: &[&str], stdin: &str| {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_system1router")).args(arguments).env("XDG_STATE_HOME", directory.path()).env_remove("SYSTEM1ROUTER_TELEMETRY").env_remove("SYSTEM1ROUTER_TELEMETRY_DISABLED").env_remove("SYSTEM1ROUTER_CONSENT")
+            .env("SYSTEM1ROUTER_JEV_RESPONSE", jev("question_simple")).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
+        child.stdin.take().unwrap().write_all(stdin.as_bytes()).unwrap();
+        String::from_utf8(child.wait_with_output().unwrap().stdout).unwrap()
+    };
+    let config = config.to_str().unwrap();
+    let decided: Value = serde_json::from_str(&cli(&["decide", "--config", config], r#"{"session_id":"s","cwd":"/tmp","prompt":"what is a mutex","model":"claude-opus-5-5","effort":"high","hook_event_name":"UserPromptSubmit"}"#)).unwrap();
+    assert_eq!((decided["action"].as_str(), decided["effort"].as_str()), (Some("switch"), Some("low")));
+    assert!(cli(&["stats", "--config", config], "").contains("By effort: low 1."));
+}
