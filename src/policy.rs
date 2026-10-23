@@ -100,11 +100,14 @@ pub fn effort_possible(event: &NormalizedEvent, config: &Config) -> bool {
     current.variant.as_ref().is_none_or(|variant| RoutingClass::ALL.iter().any(|class| config.effort.level(class) != *variant))
 }
 
-/// A different effort is rendered ahead of the conversation, so the API
-/// re-writes the cached conversation (Anthropic and OpenAI both document
+/// A different top-level effort is rendered ahead of the conversation, so the
+/// API re-writes the cached conversation (Anthropic and OpenAI both document
 /// this). A lower effort only saves thinking, so it waits while the context
-/// is large and the cache still warm; a higher effort is about quality.
+/// is large and the cache still warm; a higher effort is about quality. A
+/// host that sends the change as a per-turn message (`effortKeepsCache`,
+/// Claude Code) loses nothing, so it never waits.
 pub fn effort_switch_discards_cache(recommendation: &Recommendation, event: &NormalizedEvent, config: &Config) -> Option<String> {
+    if event.metadata.get("effortKeepsCache").and_then(serde_json::Value::as_bool) == Some(true) { return None; }
     let guard = config.effort.cache_guard_tokens;
     let tokens = event.context.context_tokens.filter(|tokens| guard > 0 && *tokens >= guard)?;
     if event.context.idle_ms.is_some_and(|idle| idle >= config.effort.cache_ttl_ms) { return None; }
@@ -279,6 +282,9 @@ mod tests {
         event.context.idle_ms = None;
         event.context.context_tokens = Some(10_000);
         assert!(effort_switch_discards_cache(&rec("low"), &event, &config).is_none(), "a short conversation is cheap to re-write");
+        event.context.context_tokens = Some(80_000);
+        event.metadata = serde_json::json!({ "effortKeepsCache": true });
+        assert!(effort_switch_discards_cache(&rec("low"), &event, &config).is_none(), "a per-turn effort message keeps the cache");
     }
     #[test] fn reports_missing_catalog_target() { let (config, mut event, classification) = fixture(); event.catalog.models[0].model = "other".into(); assert!(matches!(resolve(&classification, &event, &config), PolicyResolution::Unavailable(_))); }
 }

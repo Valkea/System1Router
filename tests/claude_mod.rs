@@ -96,15 +96,13 @@ fn decide_swaps_only_the_effort_and_waits_while_the_cache_is_warm() {
     let same = decide(payload("xhigh"), "code_hard");
     assert_eq!((same["action"].as_str(), same["code"].as_str(), same["routingClass"].as_str()), (Some("none"), Some("effort_unchanged"), Some("code_hard")), "{same}");
 
-    // A long conversation keeps its effort rather than re-writing its cache for a lower one.
+    // Claude Code keeps its cache across effort changes, so even a long conversation takes a lower effort.
     let transcript = directory.path().join("s.jsonl");
     std::fs::write(&transcript, serde_json::json!({ "type": "assistant", "message": { "model": "claude-opus-5-5", "content": [], "usage": { "input_tokens": 10, "cache_read_input_tokens": 90_000, "cache_creation_input_tokens": 0 } } }).to_string()).unwrap();
     let mut long = payload("high");
     long["transcript_path"] = serde_json::json!(transcript);
-    let held = decide(long.clone(), "question_simple");
-    assert_eq!((held["action"].as_str(), held["code"].as_str(), held["effort"].as_str()), (Some("none"), Some("cache_sticky"), Some("low")), "{held}");
-    long["idle_ms"] = serde_json::json!(600_000);
-    assert_eq!(decide(long, "question_simple")["action"], "ask", "the cache has expired: nothing to lose");
+    let lower = decide(long, "question_simple");
+    assert_eq!((lower["action"].as_str(), lower["effort"].as_str()), (Some("ask"), Some("low")), "{lower}");
 
     let recorded = run(&["choice", "--config", config, "--current", "claude-opus-5-5", "--current-variant", "high", "--suggested", "claude-opus-5-5", "--variant", "low", "--accept", "yes", "--remember"], "", directory.path(), Some("s"));
     assert_eq!(recorded["remembered"], true);

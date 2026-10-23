@@ -9,8 +9,9 @@ import type { Effort, Panel, Routed, TurnCost } from '../types'
 // request of that turn is sent to the chosen model (`turn.step`). With
 // `routing.swap: "effort"` it may suggest another effort for the same model:
 // once chosen, the main loop's requests carry that effort until the router
-// picks another, since every change re-writes the cached conversation. The
-// session's own model and effort settings are never changed.
+// picks another. Claude Code sends a changed effort as a per-turn message, so
+// the prompt cache survives it. The session's own model and effort settings
+// are never changed.
 
 const PANE = 's1router'
 const routed = atom({ plugin: 'system1router', key: 'routed' } as const, [])
@@ -187,7 +188,7 @@ async function settle($: EngineInterface, decision: Decision): Promise<Choice | 
     const percent = Math.round((decision.confidence ?? 0) * 100)
     const reason = (decision.reason ?? '').replace(/\.\s*$/, '')
     const question = isEffort
-      ? `Think at ${effort} effort instead of ${from ?? "the session's"}? Same model; the change re-writes the cached conversation once.`
+      ? `Think at ${effort} effort instead of ${from ?? "the session's"}? Same model and prompt cache.`
       : `Use ${target} for this turn instead of ${short(current)}?`
     try {
       const answer = await $.ui.ask(`S1R · ${decision.routingClass} (${percent}%)${reason ? `: ${reason}` : ''}. ${question}`, { header: 'S1R', options: labels })
@@ -208,7 +209,7 @@ async function settle($: EngineInterface, decision: Decision): Promise<Choice | 
   await update($, routed, list => [...list, entry].slice(-HISTORY))
   $.ui.status(accept ? `S1R · ${entry.routingClass} → ${target}` : `S1R · ${entry.routingClass} · kept ${isEffort ? `${was} effort` : short(current)}`)
   if (isEffort) {
-    // Held for the following turns too: every change costs a cache re-write.
+    // Held for the following turns too, until the router picks another.
     if (accept) await update($, effortState, s => ({ ...s, applied: effort }))
     return undefined
   }

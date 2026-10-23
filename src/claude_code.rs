@@ -64,7 +64,9 @@ pub fn normalize(payload: Value, fallback_cwd: Option<String>) -> NormalizedEven
         // Consent is asked by holding the prompt and resuming with ".".
         capabilities: CapabilityHints { level: Host::ClaudeCode.capability(), interactive_consent: true, protocol_version: Some(PROTOCOL_VERSION.into()), ..Default::default() },
         correlation_id: None,
-        metadata: json!({ "hostApiVersion": Host::ClaudeCode.api_version(), "hostProvider": "anthropic" }),
+        // Claude Code sends a changed effort as a per-turn system message too
+        // (`per-turn-control` beta): the cache survives it (experiments/RESULTS.md).
+        metadata: json!({ "hostApiVersion": Host::ClaudeCode.api_version(), "hostProvider": "anthropic", "effortKeepsCache": true }),
     }
 }
 
@@ -693,6 +695,7 @@ not json
     fn mod_decision_tells_an_effort_swap_from_a_model_swap() {
         let event = normalize(json!({ "session_id": "s", "prompt": "fix the typo", "model": "claude-opus-5-5", "effort": "high", "idle_ms": 1200 }), None);
         assert_eq!((event.current_model.as_ref().unwrap().variant.as_deref(), event.context.idle_ms), (Some("high"), Some(1200)));
+        assert_eq!(event.metadata["effortKeepsCache"], true);
         let none = |_: &str| None;
         let mut lower = decision(DecisionOutcome::Ask, Some("claude-opus-5-5"));
         lower.recommendation.as_mut().unwrap().variant = Some("low".into());
