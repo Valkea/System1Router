@@ -1,4 +1,4 @@
-use crate::{config::{Config, PolicyRule}, protocol::{CapabilityLevel, ModelCatalog, ModelCost, NormalizedEvent, PolicyTarget, Recommendation, RoutingClassification, RoutingMode}};
+use crate::{config::{Config, PolicyRule}, protocol::{effort_rank, CapabilityLevel, ModelCatalog, ModelCost, ModelState, NormalizedEvent, PolicyTarget, Recommendation, RoutingClass, RoutingClassification, RoutingMode}};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PolicyResolution { Recommendation(Recommendation), Bypass(String), Unavailable(String) }
@@ -72,6 +72,45 @@ pub fn switch_discards_cache_savings(recommendation: &Recommendation, event: &No
     let stay = tokens * if current_cost.cache_read > 0.0 { current_cost.cache_read } else { current_cost.input };
     let switch = tokens * suggested_cost.input;
     (switch >= stay).then(|| format!("keeping {} reuses {} cached context tokens; switching would re-read them at full price (${:.4} vs ${:.4})", current.model, tokens as u64, switch / 1e6, stay / 1e6))
+}
+
+/// The effort swap: the current model at the effort `effort.levels` gives the
+/// class, or the nearest effort the host lists for that model.
+pub fn resolve_effort(classification: &RoutingClassification, event: &NormalizedEvent, config: &Config) -> PolicyResolution {
+    let Some(current) = &event.current_model else { return PolicyResolution::Bypass("the current model is unknown".into()); };
+    let wanted = config.effort.level(&classification.routing_class);
+    let Some(variant) = available_effort(&wanted, current, &event.catalog) else { return PolicyResolution::Unavailable(format!("{} lists no effort near {wanted}", current.model)); };
+    let reason = format!("{} work takes {variant} effort", classification.routing_class);
+    PolicyResolution::Recommendation(Recommendation { rule_id: format!("effort:{}", classification.routing_class), mode: negotiate_mode(RoutingMode::FullOverride, &event.capabilities, config), provider: Some(current.provider.clone()), model: Some(current.model.clone()), variant: Some(variant), gateway_target: None, reason, routing_class: classification.routing_class.clone(), task_type: classification.task_type.clone(), confidence: classification.confidence.clone() })
+}
+
+/// A host without a catalog takes the effort as named; one with a catalog
+/// only the model's own variants, the nearest one (ties go to more effort).
+fn available_effort(wanted: &str, current: &ModelState, catalog: &ModelCatalog) -> Option<String> {
+    if catalog.models.is_empty() { return Some(wanted.into()); }
+    let variants = &catalog.models.iter().find(|item| item.provider == current.provider && item.model == current.model)?.variants;
+    if variants.iter().any(|variant| variant == wanted) { return Some(wanted.into()); }
+    let rank = effort_rank(wanted)?;
+    variants.iter().filter_map(|variant| Some((effort_rank(variant)?, variant))).min_by_key(|(other, _)| (other.abs_diff(rank), std::cmp::Reverse(*other))).map(|(_, variant)| variant.clone())
+}
+
+/// True when some class would set an effort other than the current one.
+pub fn effort_possible(event: &NormalizedEvent, config: &Config) -> bool {
+    let Some(current) = &event.current_model else { return false; };
+    current.variant.as_ref().is_none_or(|variant| RoutingClass::ALL.iter().any(|class| config.effort.level(class) != *variant))
+}
+
+/// A different effort is rendered ahead of the conversation, so the API
+/// re-writes the cached conversation (Anthropic and OpenAI both document
+/// this). A lower effort only saves thinking, so it waits while the context
+/// is large and the cache still warm; a higher effort is about quality.
+pub fn effort_switch_discards_cache(recommendation: &Recommendation, event: &NormalizedEvent, config: &Config) -> Option<String> {
+    let guard = config.effort.cache_guard_tokens;
+    let tokens = event.context.context_tokens.filter(|tokens| guard > 0 && *tokens >= guard)?;
+    if event.context.idle_ms.is_some_and(|idle| idle >= config.effort.cache_ttl_ms) { return None; }
+    let current = event.current_model.as_ref()?.variant.as_deref()?;
+    let suggested = recommendation.variant.as_deref()?;
+    (effort_rank(suggested)? < effort_rank(current)?).then(|| format!("keeping {current} effort reuses {tokens} cached context tokens; {suggested} would re-write them"))
 }
 
 fn matches_scope(rule: &PolicyRule, event: &NormalizedEvent) -> bool {
@@ -197,6 +236,49 @@ mod tests {
         event.context.context_tokens = Some(100_000);
         event.current_model.as_mut().unwrap().model = "small".into();
         assert!(switch_discards_cache_savings(&rec("big"), &event, &|_, _| None).is_none(), "upgrades are never suppressed");
+    }
+    fn effort_event(variant: Option<&str>, variants: &[&str]) -> NormalizedEvent {
+        let (_, mut event, _) = fixture();
+        event.current_model = Some(ModelState { provider: "p".into(), model: "m".into(), variant: variant.map(str::to_owned), scope: None });
+        // No variants stands for a host without a catalog (Claude Code).
+        event.catalog.models[0].variants = variants.iter().map(|variant| variant.to_string()).collect();
+        if variants.is_empty() { event.catalog.models.clear(); }
+        event
+    }
+    #[test] fn effort_swap_keeps_the_model_and_takes_the_nearest_listed_effort() {
+        let (config, _, mut classification) = fixture();
+        let effort = |event: &NormalizedEvent, classification: &RoutingClassification| match resolve_effort(classification, event, &config) { PolicyResolution::Recommendation(rec) => (rec.model, rec.variant), other => panic!("{other:?}") };
+        assert_eq!(effort(&effort_event(None, &[]), &classification), (Some("m".into()), Some("xhigh".into())));
+        assert_eq!(effort(&effort_event(None, &["low", "high", "max"]), &classification).1.as_deref(), Some("max"), "xhigh sits between high and max: ties go to more effort");
+        classification.routing_class = RoutingClass::QuestionModerate;
+        assert_eq!(effort(&effort_event(None, &["low", "high"]), &classification).1.as_deref(), Some("high"), "medium is as near to low as to high");
+        assert!(matches!(resolve_effort(&classification, &effort_event(None, &["fast"]), &config), PolicyResolution::Unavailable(_)));
+        let mut listed = effort_event(None, &["low"]);
+        listed.catalog.models[0].variants.clear();
+        assert!(matches!(resolve_effort(&classification, &listed, &config), PolicyResolution::Unavailable(_)), "a listed model without variants takes no effort");
+        let mut unknown = effort_event(None, &[]);
+        unknown.current_model = None;
+        assert!(matches!(resolve_effort(&classification, &unknown, &config), PolicyResolution::Bypass(_)));
+    }
+    #[test] fn effort_swap_is_skipped_when_every_class_keeps_the_current_effort() {
+        let (mut config, _, _) = fixture();
+        assert!(effort_possible(&effort_event(None, &[]), &config));
+        for class in RoutingClass::ALL { config.effort.levels.insert(class.as_str().into(), "high".into()); }
+        assert!(!effort_possible(&effort_event(Some("high"), &[]), &config));
+        assert!(effort_possible(&effort_event(Some("low"), &[]), &config));
+    }
+    #[test] fn effort_cache_guard_holds_lower_efforts_while_the_cache_is_warm() {
+        let (config, _, _) = fixture();
+        let mut event = effort_event(Some("high"), &[]);
+        let rec = |variant: &str| Recommendation { rule_id: "effort".into(), mode: RoutingMode::ConsentOnly, provider: Some("p".into()), model: Some("m".into()), variant: Some(variant.into()), gateway_target: None, reason: String::new(), routing_class: RoutingClass::CodeSimple, task_type: "t".into(), confidence: ClassificationConfidence { routing_class: 1.0, task_type: 1.0, context: 1.0 } };
+        event.context.context_tokens = Some(80_000);
+        assert!(effort_switch_discards_cache(&rec("low"), &event, &config).is_some());
+        assert!(effort_switch_discards_cache(&rec("max"), &event, &config).is_none(), "more effort always applies");
+        event.context.idle_ms = Some(config.effort.cache_ttl_ms);
+        assert!(effort_switch_discards_cache(&rec("low"), &event, &config).is_none(), "an expired cache has nothing to lose");
+        event.context.idle_ms = None;
+        event.context.context_tokens = Some(10_000);
+        assert!(effort_switch_discards_cache(&rec("low"), &event, &config).is_none(), "a short conversation is cheap to re-write");
     }
     #[test] fn reports_missing_catalog_target() { let (config, mut event, classification) = fixture(); event.catalog.models[0].model = "other".into(); assert!(matches!(resolve(&classification, &event, &config), PolicyResolution::Unavailable(_))); }
 }

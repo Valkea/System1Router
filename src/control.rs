@@ -70,6 +70,8 @@ pub struct Stats {
     /// Advisory suggestions shown without a switch (Claude Code).
     pub advised: u64,
     pub by_host: BTreeMap<String, u64>,
+    /// Effort swaps by the effort the turn ran at.
+    pub efforts: BTreeMap<String, u64>,
 }
 
 /// Reads OpenCode's `usage.jsonl` (actual choices) and the core's
@@ -90,6 +92,7 @@ pub fn read_stats() -> Stats {
             stats.calls += 1;
             *stats.by_host.entry(host.into()).or_default() += 1;
             *stats.models.entry(entry.get("model").and_then(Value::as_str).unwrap_or("unknown").into()).or_default() += 1;
+            if let Some(effort) = entry.get("effort").and_then(Value::as_str) { *stats.efforts.entry(effort.into()).or_default() += 1; }
             let suggested = entry.get("suggestedModel").and_then(Value::as_str).is_some();
             match entry.get("accepted").and_then(Value::as_bool) {
                 Some(accepted) if suggested => { stats.answered += 1; if accepted { stats.accepted += 1; } }
@@ -108,7 +111,8 @@ pub fn format_stats(stats: &Stats) -> String {
     let models = models.iter().map(|(model, count)| format!("{model} {count}")).collect::<Vec<_>>().join(", ");
     let hosts = stats.by_host.iter().map(|(host, count)| format!("{host} {count}")).collect::<Vec<_>>().join(", ");
     let rate = if stats.answered > 0 { format!("{:.0}%", 100.0 * stats.accepted as f64 / stats.answered as f64) } else { "—".into() };
-    format!("Prompts: {} ({hosts}). By model: {models}. Answered suggestions: {} (accepted {}, {rate}). Advisory suggestions: {}.", stats.calls, stats.answered, stats.accepted, stats.advised)
+    let efforts = if stats.efforts.is_empty() { String::new() } else { format!(" By effort: {}.", stats.efforts.iter().map(|(effort, count)| format!("{effort} {count}")).collect::<Vec<_>>().join(", ")) };
+    format!("Prompts: {} ({hosts}). By model: {models}.{efforts} Answered suggestions: {} (accepted {}, {rate}). Advisory suggestions: {}.", stats.calls, stats.answered, stats.accepted, stats.advised)
 }
 
 fn provider_ready(config: &Config) -> bool {
@@ -141,10 +145,12 @@ pub fn panel(config: &Config, path: Option<&Path>) -> Value {
             "rules": config.rules.len(),
             "claudeCodeRules": config.rules.iter().filter(|rule| rule.host.as_deref() == Some("claude-code")).count(),
             "consentMode": config.consent.mode,
+            "swap": config.routing.swap,
+            "efforts": crate::protocol::RoutingClass::ALL.iter().map(|class| (class.as_str(), config.effort.level(class))).collect::<BTreeMap<_, _>>(),
             "configPath": path,
             "providerLog": provider_log_path(),
         },
-        "stats": { "calls": stats.calls, "models": stats.models, "answered": stats.answered, "accepted": stats.accepted, "advised": stats.advised, "byHost": stats.by_host },
+        "stats": { "calls": stats.calls, "models": stats.models, "answered": stats.answered, "accepted": stats.accepted, "advised": stats.advised, "byHost": stats.by_host, "efforts": stats.efforts },
         "preferences": read_preferences(),
     })
 }
@@ -256,6 +262,7 @@ mod tests {
             r#"{"host":"opencode","model":"p/a","suggestedModel":"p/a","accepted":true}"#,
             r#"{"host":"opencode","model":"p/b","suggestedModel":"p/a","accepted":false}"#,
             r#"{"host":"opencode","model":"p/b","policyOutcome":"disabled"}"#,
+            r#"{"host":"claude-code","model":"anthropic/claude-opus-5-5","suggestedModel":"anthropic/claude-opus-5-5","accepted":true,"effort":"low"}"#,
         ].join("\n")).unwrap();
         fs::write(state.join("events.jsonl"), [
             r#"{"host":"opencode","model":"p/b","policyOutcome":"consent-requested"}"#,
@@ -267,9 +274,10 @@ mod tests {
         env::remove_var("SYSTEM1ROUTER_TELEMETRY");
         let stats = read_stats();
         match previous { Some(value) => env::set_var("XDG_STATE_HOME", value), None => env::remove_var("XDG_STATE_HOME") }
-        assert_eq!((stats.calls, stats.answered, stats.accepted, stats.advised), (3, 2, 1, 1));
-        assert_eq!(stats.by_host["claude-code"], 1);
-        assert!(format_stats(&stats).contains("accepted 1, 50%"));
+        assert_eq!((stats.calls, stats.answered, stats.accepted, stats.advised), (4, 3, 2, 1));
+        assert_eq!(stats.by_host["claude-code"], 2);
+        assert_eq!(stats.efforts["low"], 1);
+        assert!(format_stats(&stats).contains("By effort: low 1. Answered suggestions: 3 (accepted 2, 67%)"));
     }
 
     #[test]

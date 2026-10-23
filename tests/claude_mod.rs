@@ -3,10 +3,14 @@ use serde_json::Value;
 use std::{io::Write, path::Path, process::{Command, Stdio}};
 
 /// Runs the CLI; `mod_session` is the session the mod marked, if any.
-fn run(arguments: &[&str], stdin: &str, state: &Path, mod_session: Option<&str>) -> Value {
+fn run(arguments: &[&str], stdin: &str, state: &Path, mod_session: Option<&str>) -> Value { run_with(arguments, stdin, state, mod_session, None) }
+
+/// `jev` is the classification the Jev provider answers with.
+fn run_with(arguments: &[&str], stdin: &str, state: &Path, mod_session: Option<&str>, jev: Option<&str>) -> Value {
     let mut command = Command::new(env!("CARGO_BIN_EXE_system1router"));
-    command.args(arguments).env("XDG_STATE_HOME", state).env("SYSTEM1ROUTER_TELEMETRY_DISABLED", "1").env_remove("SYSTEM1ROUTER_TELEMETRY")
+    command.args(arguments).env("XDG_STATE_HOME", state).env("SYSTEM1ROUTER_TELEMETRY_DISABLED", "1").env_remove("SYSTEM1ROUTER_TELEMETRY").env_remove("SYSTEM1ROUTER_CONSENT")
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+    match jev { Some(response) => command.env("SYSTEM1ROUTER_JEV_RESPONSE", response), None => command.env_remove("SYSTEM1ROUTER_JEV_RESPONSE") };
     match mod_session { Some(session) => command.env("SYSTEM1ROUTER_CLAUDE_MOD", session), None => command.env_remove("SYSTEM1ROUTER_CLAUDE_MOD") };
     let mut child = command.spawn().unwrap();
     child.stdin.take().unwrap().write_all(stdin.as_bytes()).unwrap();
@@ -67,4 +71,44 @@ fn choices_are_remembered_and_forgotten_and_the_panel_lists_them() {
     assert_eq!(panel["preferences"][0]["accept"], true);
     assert_eq!(run(&["forget", "--config", &config], "", directory.path(), Some("s"))["forgotten"], 1);
     assert_eq!(run(&["panel", "--config", &config], "", directory.path(), Some("s"))["preferences"], serde_json::json!([]));
+}
+
+fn jev(class: &str) -> String {
+    serde_json::json!({ "answers": {
+        "routing_class": { "choice": class, "confidence": 0.9 },
+        "task_type": { "choice": "debugging", "confidence": 0.9 },
+        "context": { "score": 1.0, "confidence": 0.9 } } }).to_string()
+}
+
+#[test]
+fn decide_swaps_only_the_effort_and_waits_while_the_cache_is_warm() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = directory.path().join("config.json");
+    std::fs::write(&config, r#"{"routing":{"enabled":true,"swap":"effort"},"providers":{"selected":"jev","jev":{"baseUrl":"http://127.0.0.1:9","credentialEnv":null}}}"#).unwrap();
+    let config = config.to_str().unwrap();
+    let decide = |payload: Value, class: &str| run_with(&["decide", "--config", config], &payload.to_string(), directory.path(), Some("s"), Some(&jev(class)));
+    let payload = |effort: &str| serde_json::json!({ "session_id": "s", "cwd": "/tmp", "prompt": "fix the flaky test", "model": "claude-opus-5-5", "effort": effort, "hook_event_name": "UserPromptSubmit" });
+
+    let asked = decide(payload("medium"), "code_hard");
+    assert_eq!((asked["action"].as_str(), asked["kind"].as_str(), asked["effort"].as_str(), asked["currentEffort"].as_str()), (Some("ask"), Some("effort"), Some("xhigh"), Some("medium")), "{asked}");
+    assert_eq!(asked["modelIds"], serde_json::json!(["claude-opus-5-5"]));
+
+    let same = decide(payload("xhigh"), "code_hard");
+    assert_eq!((same["action"].as_str(), same["code"].as_str(), same["routingClass"].as_str()), (Some("none"), Some("effort_unchanged"), Some("code_hard")), "{same}");
+
+    // A long conversation keeps its effort rather than re-writing its cache for a lower one.
+    let transcript = directory.path().join("s.jsonl");
+    std::fs::write(&transcript, serde_json::json!({ "type": "assistant", "message": { "model": "claude-opus-5-5", "content": [], "usage": { "input_tokens": 10, "cache_read_input_tokens": 90_000, "cache_creation_input_tokens": 0 } } }).to_string()).unwrap();
+    let mut long = payload("high");
+    long["transcript_path"] = serde_json::json!(transcript);
+    let held = decide(long.clone(), "question_simple");
+    assert_eq!((held["action"].as_str(), held["code"].as_str(), held["effort"].as_str()), (Some("none"), Some("cache_sticky"), Some("low")), "{held}");
+    long["idle_ms"] = serde_json::json!(600_000);
+    assert_eq!(decide(long, "question_simple")["action"], "ask", "the cache has expired: nothing to lose");
+
+    let recorded = run(&["choice", "--config", config, "--current", "claude-opus-5-5", "--current-variant", "high", "--suggested", "claude-opus-5-5", "--variant", "low", "--accept", "yes", "--remember"], "", directory.path(), Some("s"));
+    assert_eq!(recorded["remembered"], true);
+    let panel = run(&["panel", "--config", config], "", directory.path(), Some("s"));
+    assert_eq!(panel["preferences"][0]["key"], "anthropic/claude-opus-5-5 (high) → anthropic/claude-opus-5-5 (low)");
+    assert_eq!((panel["status"]["swap"].as_str(), panel["status"]["efforts"]["code_hard"].as_str()), (Some("effort"), Some("xhigh")));
 }

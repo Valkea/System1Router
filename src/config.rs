@@ -138,6 +138,55 @@ pub struct RoutingConfig {
     /// models discards the conversation's prompt cache. Needs host prices.
     #[serde(default = "default_true")]
     pub cache_aware: bool,
+    /// What a decision changes: the model, or only the current model's effort.
+    #[serde(default)]
+    pub swap: Swap,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum Swap {
+    /// Switch to the model a matching rule names.
+    #[default]
+    Model,
+    /// Keep the model and set the effort `effort.levels` gives the class
+    /// (Claude Code `/effort`, an OpenCode variant). Rules are not used.
+    Effort,
+}
+
+/// The effort swap (`routing.swap: "effort"`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EffortConfig {
+    /// Effort per routing class (`code_hard: "xhigh"`); a class left out keeps
+    /// its default.
+    #[serde(default)]
+    pub levels: std::collections::BTreeMap<String, String>,
+    /// From this many context tokens a lower effort waits: changing effort
+    /// re-writes the cached conversation, which costs more than the thinking
+    /// it saves. A higher effort always applies. 0 never waits.
+    #[serde(default = "default_effort_cache_guard")]
+    pub cache_guard_tokens: u64,
+    /// How long the host's prompt cache outlives the last response; after that
+    /// much idle time nothing cached is lost and any effort applies.
+    #[serde(default = "default_cache_ttl")]
+    pub cache_ttl_ms: u64,
+}
+
+fn default_effort_cache_guard() -> u64 { 50_000 }
+fn default_cache_ttl() -> u64 { 300_000 }
+
+impl Default for EffortConfig { fn default() -> Self { Self { levels: Default::default(), cache_guard_tokens: default_effort_cache_guard(), cache_ttl_ms: default_cache_ttl() } } }
+
+impl EffortConfig {
+    pub fn level(&self, class: &RoutingClass) -> String {
+        self.levels.get(class.as_str()).cloned().unwrap_or_else(|| match class {
+            RoutingClass::QuestionSimple => "low",
+            RoutingClass::QuestionModerate | RoutingClass::CodeSimple => "medium",
+            RoutingClass::QuestionHard | RoutingClass::CodeModerate => "high",
+            RoutingClass::CodeHard => "xhigh",
+        }.into())
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -151,7 +200,7 @@ pub enum ClassSelection {
     Argmax,
 }
 
-impl Default for RoutingConfig { fn default() -> Self { Self { enabled: false, default_mode: RoutingMode::Advisory, fail_open: true, min_confidence: 0.0, allowed_task_types: Vec::new(), class_selection: ClassSelection::default(), cache_aware: true } } }
+impl Default for RoutingConfig { fn default() -> Self { Self { enabled: false, default_mode: RoutingMode::Advisory, fail_open: true, min_confidence: 0.0, allowed_task_types: Vec::new(), class_selection: ClassSelection::default(), cache_aware: true, swap: Swap::default() } } }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -257,13 +306,15 @@ pub struct Config {
     #[serde(default)]
     pub prices: PricesConfig,
     #[serde(default)]
+    pub effort: EffortConfig,
+    #[serde(default)]
     pub rules: Vec<PolicyRule>,
     #[serde(default)]
     pub default_recommendation: DefaultRecommendation,
 }
 
 impl Default for Config {
-    fn default() -> Self { Self { providers: ProviderConfig::default(), redaction: RedactionConfig::default(), timeouts: TimeoutConfig::default(), consent: ConsentConfig::default(), routing: RoutingConfig::default(), gateway: GatewayConfig::default(), telemetry: TelemetryConfig::default(), prices: PricesConfig::default(), rules: Vec::new(), default_recommendation: DefaultRecommendation::default() } }
+    fn default() -> Self { Self { providers: ProviderConfig::default(), redaction: RedactionConfig::default(), timeouts: TimeoutConfig::default(), consent: ConsentConfig::default(), routing: RoutingConfig::default(), gateway: GatewayConfig::default(), telemetry: TelemetryConfig::default(), prices: PricesConfig::default(), effort: EffortConfig::default(), rules: Vec::new(), default_recommendation: DefaultRecommendation::default() } }
 }
 
 impl Config {
@@ -299,6 +350,9 @@ impl Config {
                 !task["criteria"].is_object() || !context["criteria"].is_array() {
                 return Err("providers.jev.questions must keep the six routing classes, choice task_type and score context".into());
             }
+        }
+        for (class, level) in &self.effort.levels {
+            if RoutingClass::parse(class).is_none() || level.trim().is_empty() { return Err(format!("effort.levels.{class} must name a routing class and an effort")); }
         }
         let mut ids = std::collections::HashSet::new();
         for rule in &self.rules {
@@ -459,6 +513,18 @@ mod tests {
         config.providers.jev.state_template = Some("{query}".into());
         config.providers.jev.questions = Some(serde_json::json!({ "routing_class": {} }));
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn effort_levels_override_defaults_per_class() {
+        let config: Config = serde_json::from_str(r#"{"routing":{"swap":"effort"},"effort":{"levels":{"code_hard":"max"}}}"#).unwrap();
+        assert_eq!(config.routing.swap, Swap::Effort);
+        assert_eq!(config.effort.level(&RoutingClass::CodeHard), "max");
+        assert_eq!(config.effort.level(&RoutingClass::QuestionSimple), "low");
+        assert!(config.validate().is_ok());
+        let unknown: Config = serde_json::from_str(r#"{"effort":{"levels":{"code_huge":"max"}}}"#).unwrap();
+        assert!(unknown.validate().is_err());
+        assert_eq!(Config::default().routing.swap, Swap::Model);
     }
 
     #[test]

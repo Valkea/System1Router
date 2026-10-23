@@ -50,12 +50,14 @@ pub fn normalize(payload: Value, fallback_cwd: Option<String>) -> NormalizedEven
         // The mod knows the session's model. A hook does not: the transcript
         // shows the model actually answering, and before the first reply the
         // configured model is the best guess.
-        current_model: text("model").filter(|model| !model.trim().is_empty()).or(transcript.model.clone()).or_else(|| configured_model(cwd_for_settings.as_deref())).map(|model| ModelState { provider: "anthropic".into(), model, variant: None, scope: Some(session_id) }),
+        // The mod also knows the effort its last request was sent with.
+        current_model: text("model").filter(|model| !model.trim().is_empty()).or(transcript.model.clone()).or_else(|| configured_model(cwd_for_settings.as_deref())).map(|model| ModelState { provider: "anthropic".into(), model, variant: text("effort").filter(|effort| !effort.trim().is_empty()), scope: Some(session_id) }),
         context: BoundedContext {
             conversation_summary: transcript.summary,
             files: transcript.files,
             tools: transcript.tools,
             context_tokens: transcript.context_tokens,
+            idle_ms: payload.get("idle_ms").and_then(Value::as_u64),
             ..Default::default()
         },
         catalog: Default::default(),
@@ -285,17 +287,28 @@ pub fn model_ids(target: &str, current: Option<&str>, table: Option<&crate::pric
 /// non-interactive consent mode) or `none` (nothing to choose). `record` says
 /// the mod must report the outcome with `system1router choice`, because the
 /// core left the answer to the host.
+///
+/// `kind` is `effort` when the suggestion keeps the session's model and only
+/// changes its effort (`routing.swap: "effort"`), `model` otherwise.
 pub fn mod_decision(decision: &NormalizedDecision, event: &NormalizedEvent, table: Option<&crate::prices::PriceTable>, remembered: impl Fn(&str) -> Option<bool>) -> Value {
     let current = event.current_model.as_ref().map(|state| state.model.as_str());
-    let mut output = json!({ "action": "none", "record": false, "current": current, "code": decision.diagnostic.code, "message": decision.diagnostic.message });
+    let current_effort = event.current_model.as_ref().and_then(|state| state.variant.as_deref());
+    let mut output = json!({ "action": "none", "record": false, "current": current, "currentEffort": current_effort, "code": decision.diagnostic.code, "message": decision.diagnostic.message });
+    // A class that changes nothing (same effort, a warm cache) is still shown.
+    if let Some(class) = decision.telemetry.as_ref().and_then(|telemetry| telemetry.routing_class.as_ref()) { output["routingClass"] = json!(class); }
+    if let Some(effort) = decision.diagnostic.details.get("suggestedEffort") { output["effort"] = effort.clone(); }
     let Some(recommendation) = decision.recommendation.as_ref().filter(|_| decision.outcome != DecisionOutcome::Block) else { return output; };
     let Some(model) = recommendation.model.as_deref() else { return output; };
     output["routingClass"] = json!(recommendation.routing_class);
     output["confidence"] = json!(recommendation.confidence.routing_class);
     output["reason"] = json!(recommendation.reason);
-    if current.is_some_and(|current| same_model(current, model)) { return output; }
     let variant = recommendation.variant.as_deref();
-    let current_label = crate::control::model_label("anthropic", current.unwrap_or("default"), None);
+    let effort = current.is_some_and(|current| same_model(current, model));
+    if effort && (variant.is_none() || variant == current_effort) { return output; }
+    output["kind"] = json!(if effort { "effort" } else { "model" });
+    output["effort"] = json!(variant);
+    // The current effort only tells efforts apart; a model's label has none.
+    let current_label = crate::control::model_label("anthropic", current.unwrap_or("default"), current_effort.filter(|_| effort));
     // Claude Code only runs Anthropic models; `choice` labels them the same way.
     let suggested_label = crate::control::model_label("anthropic", model, variant);
     let (action, record, remembered) = if decision.outcome == DecisionOutcome::Ask {
@@ -313,7 +326,7 @@ pub fn mod_decision(decision: &NormalizedDecision, event: &NormalizedEvent, tabl
     output["record"] = json!(record);
     output["remembered"] = json!(remembered);
     output["model"] = json!(model);
-    output["modelIds"] = json!(model_ids(model, current, table));
+    output["modelIds"] = json!(if effort { vec![current.unwrap_or(model).to_owned()] } else { model_ids(model, current, table) });
     output["variant"] = json!(variant);
     output["currentLabel"] = json!(current_label);
     output["suggestedLabel"] = json!(suggested_label);
@@ -674,6 +687,29 @@ not json
         event.current_model.as_mut().unwrap().model = "claude-opus-5-5".into();
         let same = mod_decision(&decision(DecisionOutcome::Ask, Some("opus")), &event, None, none);
         assert_eq!((same["action"].as_str(), same["routingClass"].as_str()), (Some("none"), Some("code_hard")), "already on it, but the class is still shown");
+    }
+
+    #[test]
+    fn mod_decision_tells_an_effort_swap_from_a_model_swap() {
+        let event = normalize(json!({ "session_id": "s", "prompt": "fix the typo", "model": "claude-opus-5-5", "effort": "high", "idle_ms": 1200 }), None);
+        assert_eq!((event.current_model.as_ref().unwrap().variant.as_deref(), event.context.idle_ms), (Some("high"), Some(1200)));
+        let none = |_: &str| None;
+        let mut lower = decision(DecisionOutcome::Ask, Some("claude-opus-5-5"));
+        lower.recommendation.as_mut().unwrap().variant = Some("low".into());
+        let asked = mod_decision(&lower, &event, None, none);
+        assert_eq!((asked["action"].as_str(), asked["kind"].as_str(), asked["effort"].as_str(), asked["currentEffort"].as_str()), (Some("ask"), Some("effort"), Some("low"), Some("high")));
+        assert_eq!(asked["modelIds"], json!(["claude-opus-5-5"]), "an effort swap never resolves another model");
+        assert_eq!(asked["currentLabel"].as_str().unwrap().to_owned() + " → " + asked["suggestedLabel"].as_str().unwrap(), "anthropic/claude-opus-5-5 (high) → anthropic/claude-opus-5-5 (low)");
+        lower.recommendation.as_mut().unwrap().variant = Some("high".into());
+        assert_eq!(mod_decision(&lower, &event, None, none)["action"], "none", "already at that effort");
+        let model = mod_decision(&decision(DecisionOutcome::Ask, Some("sonnet")), &event, None, none);
+        assert_eq!((model["kind"].as_str(), model["currentLabel"].as_str()), (Some("model"), Some("anthropic/claude-opus-5-5")));
+        let mut sticky = decision(DecisionOutcome::Allow, None);
+        sticky.diagnostic = Diagnostic::info("cache_sticky", "keeping high effort reuses 80000 cached context tokens");
+        sticky.diagnostic.details = json!({ "effort": "high", "suggestedEffort": "low" });
+        sticky.telemetry = Some(crate::protocol::RoutingEvent { correlation_id: "c".into(), host: "claude-code".into(), routing_class: Some(RoutingClass::CodeSimple), task_type: None, mode: RoutingMode::Advisory, policy_outcome: "cache-sticky".into(), latency_ms: 0, error_category: None, model: None, suggested_model: None, accepted: None, debug_capture: None });
+        let held = mod_decision(&sticky, &event, None, none);
+        assert_eq!((held["action"].as_str(), held["code"].as_str(), held["routingClass"].as_str(), held["effort"].as_str()), (Some("none"), Some("cache_sticky"), Some("code_simple"), Some("low")));
     }
 
     #[test]

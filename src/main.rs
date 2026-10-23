@@ -409,7 +409,7 @@ fn command_hook(args: &[String], config: Config) {
                     let cwd = payload.get("cwd").and_then(Value::as_str);
                     let now = claude_code::configured_model(cwd).or(held.current.clone());
                     let accepted = now.as_deref().is_some_and(|model| claude_code::same_model(model, &held.suggested) || model == held.suggested);
-                    system1router_core::telemetry::record_choice(&config, "claude-code", now.as_deref(), &held.suggested, accepted);
+                    system1router_core::telemetry::record_choice(&config, "claude-code", now.as_deref(), &held.suggested, accepted, None);
                     print_json(output);
                     return;
                 }
@@ -445,13 +445,17 @@ fn command_decide(config: Config) {
     print_json(claude_code::mod_decision(&decision, &event, system1router_core::prices::load().as_ref(), control::remembered));
 }
 
-/// Records the answer the mod got: `choice --current M --suggested M
-/// [--variant V] --accept yes|no [--remember]`.
+/// Records the answer the mod got: `choice --current M [--current-variant V]
+/// --suggested M [--variant V] --accept yes|no [--remember]`. The same model
+/// on both sides is an effort swap, told apart by the variants.
 fn command_choice(args: &[String], config: &Config) {
     let (Some(current), Some(suggested)) = (argument(args, "--current"), argument(args, "--suggested")) else { print_json(json!({ "recorded": false, "error": "--current and --suggested are required" })); return; };
     let accepted = argument(args, "--accept") == Some("yes");
-    system1router_core::telemetry::record_choice(config, "claude-code", Some(if accepted { suggested } else { current }), suggested, accepted);
-    let remembered = args.iter().any(|arg| arg == "--remember").then(|| control::remember(&control::model_label("anthropic", current, None), &control::model_label("anthropic", suggested, argument(args, "--variant")), accepted));
+    let (variant, current_variant) = (argument(args, "--variant"), argument(args, "--current-variant"));
+    let effort = (current == suggested || claude_code::same_model(current, suggested)).then(|| if accepted { variant } else { current_variant }).flatten();
+    system1router_core::telemetry::record_choice(config, "claude-code", Some(if accepted { suggested } else { current }), suggested, accepted, effort);
+    let current_variant = current_variant.filter(|_| current == suggested || claude_code::same_model(current, suggested));
+    let remembered = args.iter().any(|arg| arg == "--remember").then(|| control::remember(&control::model_label("anthropic", current, current_variant), &control::model_label("anthropic", suggested, variant), accepted));
     match remembered { Some(Err(error)) => print_json(json!({ "recorded": true, "remembered": false, "error": error })), remembered => print_json(json!({ "recorded": true, "remembered": remembered.is_some() })) }
 }
 

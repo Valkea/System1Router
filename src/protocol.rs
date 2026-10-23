@@ -102,6 +102,12 @@ impl fmt::Display for RoutingClass {
     }
 }
 
+/// Reasoning efforts from least to most, as hosts name them (Claude Code
+/// `/effort`, OpenAI `reasoning_effort`, OpenCode variants).
+pub const EFFORTS: [&str; 7] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+pub fn effort_rank(effort: &str) -> Option<usize> { EFFORTS.iter().position(|level| *level == effort) }
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelState {
@@ -177,6 +183,10 @@ pub struct BoundedContext {
     /// as last reported by the host. Used to price the cache loss of a switch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_tokens: Option<u64>,
+    /// Milliseconds since the conversation's last response. Past the prompt
+    /// cache's lifetime a switch loses nothing cached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_ms: Option<u64>,
     #[serde(default)]
     pub metadata: Value,
 }

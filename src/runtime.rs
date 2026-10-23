@@ -1,4 +1,4 @@
-use crate::{classification::{classify_event, DecisionProvider, ProviderError}, config::{Config, ConsentMode}, policy::{alternative_possible, resolve, switch_discards_cache_savings, target_available, PolicyResolution}, protocol::{correlation_id, supported_protocol, ConsentOutcome, DecisionOutcome, Diagnostic, NormalizedDecision, NormalizedEvent, RoutingEvent, RoutingMode}, telemetry};
+use crate::{classification::{classify_event, DecisionProvider, ProviderError}, config::{Config, ConsentMode, Swap}, policy::{alternative_possible, effort_possible, effort_switch_discards_cache, resolve, resolve_effort, switch_discards_cache_savings, target_available, PolicyResolution}, protocol::{correlation_id, supported_protocol, ConsentOutcome, DecisionOutcome, Diagnostic, NormalizedDecision, NormalizedEvent, RoutingEvent, RoutingMode}, telemetry};
 use std::time::Instant;
 
 pub fn process_event(event: &NormalizedEvent, config: &Config, provider: &dyn DecisionProvider) -> NormalizedDecision {
@@ -22,7 +22,11 @@ pub fn process_event(event: &NormalizedEvent, config: &Config, provider: &dyn De
     if event.request.query.trim().is_empty() {
         return base(DecisionOutcome::Bypass, Diagnostic::info("empty_query", "the request has no text to classify"), None, RoutingMode::Advisory, "empty-query");
     }
-    if !alternative_possible(event, config) {
+    let effort = config.routing.swap == Swap::Effort;
+    if effort && !effort_possible(event, config) {
+        return base(DecisionOutcome::Bypass, Diagnostic::info("no_alternative", "every class keeps the current effort"), None, RoutingMode::Advisory, "no-alternative");
+    }
+    if !effort && !alternative_possible(event, config) {
         return base(DecisionOutcome::Bypass, Diagnostic::info("no_alternative", "no applicable rule targets a model other than the current one"), None, RoutingMode::Advisory, "no-alternative");
     }
     let mut classified_event = event.clone();
@@ -34,7 +38,7 @@ pub fn process_event(event: &NormalizedEvent, config: &Config, provider: &dyn De
     if !config.routing.allowed_task_types.is_empty() && !config.routing.allowed_task_types.iter().any(|task| task == &classification.task_type) {
         return base(DecisionOutcome::Bypass, Diagnostic::info("task_not_eligible", "task type is not enabled for routing"), Some(&classification), RoutingMode::Advisory, "task-ineligible");
     }
-    let resolution = resolve(&classification, event, config);
+    let resolution = if effort { resolve_effort(&classification, event, config) } else { resolve(&classification, event, config) };
     let recommendation = match resolution {
         PolicyResolution::Recommendation(value) => value,
         PolicyResolution::Bypass(reason) => return base(DecisionOutcome::Bypass, Diagnostic::info("policy_bypass", reason), Some(&classification), RoutingMode::Advisory, "bypass"),
@@ -43,7 +47,19 @@ pub fn process_event(event: &NormalizedEvent, config: &Config, provider: &dyn De
     if !target_available(&recommendation, event, config) {
         return base(DecisionOutcome::Bypass, Diagnostic::warning("target_unavailable", "the selected target is not available in the current catalog or gateway allowlist"), Some(&classification), recommendation.mode.clone(), "target-unavailable");
     }
-    if config.routing.cache_aware {
+    let current_effort = event.current_model.as_ref().and_then(|current| current.variant.as_deref());
+    if effort && recommendation.variant.as_deref() == current_effort {
+        let mut decision = base(DecisionOutcome::Allow, Diagnostic::info("effort_unchanged", format!("{} work keeps {} effort", classification.routing_class, current_effort.unwrap_or_default())), Some(&classification), recommendation.mode.clone(), "unchanged");
+        decision.diagnostic.details = serde_json::json!({ "effort": current_effort });
+        return decision;
+    }
+    if effort && config.routing.cache_aware {
+        if let Some(reason) = effort_switch_discards_cache(&recommendation, event, config) {
+            let mut decision = base(DecisionOutcome::Allow, Diagnostic::info("cache_sticky", reason), Some(&classification), recommendation.mode.clone(), "cache-sticky");
+            decision.diagnostic.details = serde_json::json!({ "effort": current_effort, "suggestedEffort": recommendation.variant });
+            return decision;
+        }
+    } else if config.routing.cache_aware {
         let table = fallback_prices(event, config);
         let fallback = |provider: &str, model: &str| table.as_ref().and_then(|table| crate::prices::lookup(table, provider, model));
         if let Some(reason) = switch_discards_cache_savings(&recommendation, event, &fallback) {
