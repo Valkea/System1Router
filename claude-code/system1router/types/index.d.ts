@@ -48,6 +48,10 @@ export type Panel = {
     rules: number
     claudeCodeRules: number
     consentMode: string
+    /** The dialog under `interactive`: `confirm` or `menu`. */
+    consentStyle?: 'confirm' | 'menu'
+    /** Confidence from which a suggestion applies without asking. */
+    askBelow?: number | null
     /** What a decision changes (`routing.swap`). */
     swap: 'model' | 'effort'
     /** Effort per routing class (`effort.levels` and defaults). */

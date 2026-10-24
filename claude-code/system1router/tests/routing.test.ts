@@ -325,3 +325,19 @@ test('resending an aborted prompt with a tag corrects its decision without class
   expect(state.calls.filter(call => call[0] === 'decide')).toHaveLength(decided)
   expect(state.calls).toContainEqual(['override', '--session', 'session-1', '--model', 'claude-sonnet-5-5', '--effort', 'xhigh', '--from', 'low', '--correlation', 's1r-3'])
 })
+
+test('/s1router_consent sets the dialog and the pane cycles it', async ($, on) => {
+  const state = engine(on, ASK)
+  expect((await $.command.run({ command: 's1router_consent', args: 'menu ask-below 80%', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } })).text).toBe('ok')
+  expect(state.calls).toContainEqual(['consent', 'menu', '--ask-below', '80%'])
+  state.panel = { ...PANEL, status: { ...PANEL.status, consentMode: 'interactive', consentStyle: 'menu', askBelow: 0.8 } }
+  await $.command.run({ command: 's1router', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } })
+  const ui = await $.ui.mount({
+    plugin: 'system1router', surface: 'terminal', component: 'Pane', requestId: 's1router',
+    props: { title: 'System1Router', isFocused: true, bodyColumns: 120, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} },
+  })
+  expect(await ui.find({ text: /consent menu below 80%/ })).toBeDefined()
+  await ui.press({ key: 'consent' })
+  expect(state.calls).toContainEqual(['consent', 'auto'])
+  await ui.unmount()
+})

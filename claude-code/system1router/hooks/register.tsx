@@ -142,6 +142,27 @@ async function toggle($: EngineInterface, force?: 'on' | 'off'): Promise<string>
   return text
 }
 
+/** How suggestions are confirmed, as `/s1router_consent` and the pane name it. */
+export function consentLabel(status: Panel['status']): string {
+  if (status.consentMode === 'always-accept') return 'auto'
+  if (status.consentMode !== 'interactive') return status.consentMode
+  return `${status.consentStyle ?? 'confirm'}${status.askBelow != null ? ` below ${Math.round(status.askBelow * 100)}%` : ''}`
+}
+
+/** `/s1router_consent [auto|confirm|menu] [ask-below 80%|off]`, through `system1router consent`. */
+async function consent($: EngineInterface, args: string): Promise<string> {
+  const words = args.trim().split(/\s+/).filter(Boolean)
+  const argv = ['consent']
+  for (let index = 0; index < words.length; index++) {
+    const word = (words[index] ?? '').toLowerCase()
+    if (word === 'ask-below' || word === '--ask-below' || word === 'below') argv.push('--ask-below', words[++index] ?? 'off')
+    else argv.push(word)
+  }
+  const text = await run($, argv)
+  await refresh($)
+  return text
+}
+
 async function forget($: EngineInterface, key?: string): Promise<void> {
   await run($, key ? ['forget', key] : ['forget'])
   await refresh($)
@@ -301,6 +322,7 @@ export const register: Register = (on, options) => {
     if (!known.has('s1router_toggle')) await $.command.register({ name: 's1router_toggle', description: 'Toggle System1Router routing on/off', argumentHint: '[on|off]' })
     if (!known.has('s1router_config')) await $.command.register({ name: 's1router_config', description: 'Show System1Router status, config and log paths' })
     if (!known.has('s1router_stats')) await $.command.register({ name: 's1router_stats', description: 'Show System1Router calls per model and suggestion acceptance' })
+    await $.command.register({ name: 's1router_consent', description: 'How System1Router confirms an effort: auto, confirm or menu', argumentHint: '[auto|confirm|menu] [ask-below 80%|off]' })
     const data = await refresh($)
     $.ui.status(data ? (data.status.enabled ? 'S1R on' : 'S1R off') : 'S1R unavailable')
     return next(e)
@@ -445,6 +467,8 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 's1router_stats' }, async $ => ({ text: await run($, ['stats']) }))
 
+  on('command.run', { command: 's1router_consent' }, async ($, e) => ({ text: await consent($, e.args) }))
+
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
     const data = await read($, panel)
@@ -456,9 +480,9 @@ export const register: Register = (on, options) => {
     // The terminal reports clicks only in its fullscreen layout; elsewhere the
     // pane is used from the keyboard once it holds the focus.
     const keys = e.props.isFocused
-      ? 't, r, q or Tab and Enter · Esc closes'
+      ? 't, r, c, q or Tab and Enter · Esc closes'
       : e.surface === 'terminal' && e.viewport?.isFullscreen !== true
-        ? 'ctrl+x tab to use the buttons (then t, r, q or Tab and Enter) · ctrl+x x closes'
+        ? 'ctrl+x tab to use the buttons (then t, r, c, q or Tab and Enter) · ctrl+x x closes'
         : null
 
     if (!data) {
@@ -492,11 +516,14 @@ export const register: Register = (on, options) => {
           <Text>  </Text>
           <Button key="refresh" hotkey="r" plain label="Refresh" onPress={() => refresh($)} />
           <Text>  </Text>
+          {/* auto → confirm → menu */}
+          <Button key="consent" hotkey="c" plain label={`Consent: ${consentLabel(status)}`} onPress={() => consent($, status.consentMode === 'always-accept' ? 'confirm' : status.consentStyle === 'menu' ? 'auto' : 'menu')} />
+          <Text>  </Text>
           <Button key="close" hotkey="q" plain role="dismiss" label="Close" onPress={() => closePane($)} />
         </Box>
         {keys && <Text dimColor>{keys}</Text>}
         <Text dimColor>
-          {status.provider}{status.providerReady ? '' : ' (not configured)'} · {status.rules} rules ({status.claudeCodeRules} for Claude Code) · consent {status.consentMode}
+          {status.provider}{status.providerReady ? '' : ' (not configured)'} · {status.rules} rules ({status.claudeCodeRules} for Claude Code) · consent {consentLabel(status)}
         </Text>
         {failure && <Text color="red">{failure}</Text>}
 

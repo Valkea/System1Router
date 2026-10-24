@@ -45,6 +45,17 @@ fn main() {
             println!("{}", run_control(claude_code::Control::Toggle(enabled), config_path.as_deref(), &config));
         }
         Some("status") => println!("{}", run_control(claude_code::Control::Status, config_path.as_deref(), &config)),
+        // `consent [auto|confirm|menu] [--ask-below 0.8|off]`: how effort suggestions are confirmed.
+        Some("consent") => {
+            let Some(path) = config_path.clone().or_else(system1router_core::config::default_config_path) else { println!("System1Router: no config path; set SYSTEM1ROUTER_CONFIG."); return; };
+            // The first word that is neither an option nor an option's value.
+            let style = args.iter().enumerate().skip(1).find(|(index, word)| !word.starts_with("--") && !args[index - 1].starts_with("--")).map(|(_, word)| word.as_str());
+            let ask_below = match argument(&args, "--ask-below") { None => Ok(None), Some("off") => Ok(Some(None)), Some(value) => value.trim_end_matches('%').parse::<f32>().map(|number| Some(Some(if number > 1.0 { number / 100.0 } else { number }))).map_err(|_| format!("--ask-below takes a confidence such as 0.8, 80% or off, not {value:?}")) };
+            match ask_below.and_then(|ask_below| control::set_consent(&path, style, ask_below)) {
+                Ok(text) => println!("System1Router {text}."),
+                Err(error) => println!("System1Router: {error}"),
+            }
+        }
         Some("stats") => println!("{}", run_control(claude_code::Control::Stats, config_path.as_deref(), &config)),
         Some("hook") => command_hook(&args, config),
         Some("decide") => command_decide(config),
@@ -76,6 +87,7 @@ fn print_help() {
     println!("  hook --host <host>                                    Process one host hook event");
     println!("  gateway                                               Start the optional routing gateway");
     println!("  toggle [on|off]                                       Turn routing on or off (also /s1router_toggle)");
+    println!("  consent [auto|confirm|menu] [--ask-below 0.8|off]     How effort suggestions are confirmed (also /s1router_consent)");
     println!("  status | stats                                        Show routing status or usage stats");
     println!("  decide | choice | panel | forget [KEY]                Used by the Claude Code mod (JSON)");
     println!("  prices [--refresh]                                    Show rule target prices (LiteLLM table)");

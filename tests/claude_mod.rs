@@ -185,3 +185,18 @@ fn ask_below_applies_confident_efforts_and_the_style_reaches_the_mod() {
     assert_eq!(unsure["action"], "ask", "{unsure}");
     assert!(unsure["correlationId"].as_str().is_some_and(|id| id.starts_with("s1r-")));
 }
+
+#[test]
+fn consent_command_sets_the_dialog_and_the_panel_shows_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = config(directory.path(), true);
+    let say = |arguments: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_system1router")).args(arguments).env("XDG_STATE_HOME", directory.path()).output().unwrap();
+        String::from_utf8(output.stdout).unwrap()
+    };
+    assert_eq!(say(&["consent", "--config", &config, "menu", "--ask-below", "80%"]).trim(), "System1Router consent menu: pick the effort in a menu, asked only below 80% confidence.");
+    let panel = run(&["panel", "--config", &config], "", directory.path(), None);
+    assert_eq!((panel["status"]["consentMode"].as_str(), panel["status"]["consentStyle"].as_str(), panel["status"]["askBelow"].as_f64()), (Some("interactive"), Some("menu"), Some(0.8_f32 as f64)));
+    assert!(say(&["consent", "--config", &config, "--ask-below", "nope"]).contains("--ask-below takes"));
+    assert!(say(&["consent", "--config", &config]).contains("consent menu"));
+}

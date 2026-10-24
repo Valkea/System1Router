@@ -19,45 +19,92 @@ pub fn provider_log_path() -> Option<PathBuf> {
 }
 
 /// Sets `routing.enabled` (or flips it when `enabled` is `None`) and returns
-/// the new value. JSON keeps its key order; TOML is edited in place so its
-/// comments and layout survive.
+/// the new value.
 pub fn set_routing_enabled(path: &Path, enabled: Option<bool>) -> Result<bool, String> {
+    let current = read_config_value(path, "routing", "enabled")?.and_then(|value| value.as_bool()) == Some(true);
+    let value = enabled.unwrap_or(!current);
+    set_config(path, "routing", &[("enabled", Value::Bool(value))])?;
+    Ok(value)
+}
+
+/// How the person is asked: `auto` applies suggestions, `confirm` and `menu`
+/// ask in that dialog. `ask_below` (`Some(None)` clears it) applies confident
+/// suggestions without asking. Returns the resulting setting as a sentence.
+pub fn set_consent(path: &Path, style: Option<&str>, ask_below: Option<Option<f32>>) -> Result<String, String> {
+    let mut values = Vec::new();
+    match style {
+        Some("auto") => values.push(("mode", Value::from("always-accept"))),
+        Some(style @ ("confirm" | "menu")) => { values.push(("mode", Value::from("interactive"))); values.push(("style", Value::from(style))); }
+        Some(other) => return Err(format!("unknown consent style {other:?}: use auto, confirm or menu")),
+        None => {}
+    }
+    if let Some(threshold) = ask_below {
+        if threshold.is_some_and(|value| !(0.0..=1.0).contains(&value)) { return Err("the ask-below confidence must be between 0 and 1".into()); }
+        values.push(("askBelow", threshold.map(|value| Value::from((f64::from(value) * 100.0).round() / 100.0)).unwrap_or(Value::Null)));
+    }
+    if !values.is_empty() { set_config(path, "consent", &values)?; }
+    let mode = read_config_value(path, "consent", "mode")?.and_then(|value| value.as_str().map(str::to_owned)).unwrap_or_else(|| "interactive".into());
+    let style = read_config_value(path, "consent", "style")?.and_then(|value| value.as_str().map(str::to_owned)).unwrap_or_else(|| "confirm".into());
+    let below = read_config_value(path, "consent", "askBelow")?.and_then(|value| value.as_f64());
+    Ok(match mode.as_str() {
+        "always-accept" => "consent auto: suggestions apply without asking".into(),
+        "interactive" => format!("consent {style}: {}{}", if style == "menu" { "pick the effort in a menu" } else { "use or keep each suggestion" }, below.map(|value| format!(", asked only below {:.0}% confidence", value * 100.0)).unwrap_or_default()),
+        other => format!("consent {other}"),
+    })
+}
+
+fn is_toml(path: &Path) -> bool { path.extension().and_then(|extension| extension.to_str()) == Some("toml") }
+
+fn read_config_value(path: &Path, section: &str, key: &str) -> Result<Option<Value>, String> {
     let text = fs::read_to_string(path).map_err(|error| format!("read {}: {error}; create the config first (see README)", path.display()))?;
-    let (updated, value) = if path.extension().and_then(|extension| extension.to_str()) == Some("toml") {
-        toggle_toml(&text, enabled)?
+    let root: Value = if is_toml(path) {
+        let parsed: toml::Value = toml::from_str(&text).map_err(|error| format!("parse TOML config: {error}"))?;
+        serde_json::to_value(parsed).map_err(|error| error.to_string())?
+    } else { serde_json::from_str(&text).map_err(|error| format!("parse {}: {error}", path.display()))? };
+    Ok(root.get(section).and_then(|section| section.get(key)).cloned())
+}
+
+/// Sets `section.key` for each pair (null removes it). JSON keeps its key
+/// order; TOML is edited in place so its comments and layout survive. The
+/// file is replaced atomically.
+pub fn set_config(path: &Path, section: &str, values: &[(&str, Value)]) -> Result<(), String> {
+    let text = fs::read_to_string(path).map_err(|error| format!("read {}: {error}; create the config first (see README)", path.display()))?;
+    let updated = if is_toml(path) {
+        toml::from_str::<toml::Value>(&text).map_err(|error| format!("parse TOML config: {error}"))?;
+        values.iter().fold(text, |text, (key, value)| set_toml(&text, section, key, value))
     } else {
         let mut root: Value = serde_json::from_str(&text).map_err(|error| format!("parse {}: {error}", path.display()))?;
         let object = root.as_object_mut().ok_or("config root must be a JSON object")?;
-        let routing = object.entry("routing").or_insert_with(|| Value::Object(Default::default())).as_object_mut().ok_or("`routing` must be an object")?;
-        let value = enabled.unwrap_or_else(|| routing.get("enabled").and_then(Value::as_bool) != Some(true));
-        routing.insert("enabled".into(), Value::Bool(value));
-        (serde_json::to_string_pretty(&root).map_err(|error| error.to_string())? + "\n", value)
+        let table = object.entry(section).or_insert_with(|| Value::Object(Default::default())).as_object_mut().ok_or_else(|| format!("`{section}` must be an object"))?;
+        for (key, value) in values {
+            if value.is_null() { table.remove(*key); } else { table.insert((*key).into(), value.clone()); }
+        }
+        serde_json::to_string_pretty(&root).map_err(|error| error.to_string())? + "\n"
     };
     let temporary = path.with_extension(format!("s1r-{}.tmp", std::process::id()));
     fs::write(&temporary, updated).map_err(|error| format!("write {}: {error}", temporary.display()))?;
     #[cfg(unix)]
     if let Ok(metadata) = fs::metadata(path) { let _ = fs::set_permissions(&temporary, metadata.permissions()); }
-    fs::rename(&temporary, path).map_err(|error| { let _ = fs::remove_file(&temporary); format!("replace {}: {error}", path.display()) })?;
-    Ok(value)
+    fs::rename(&temporary, path).map_err(|error| { let _ = fs::remove_file(&temporary); format!("replace {}: {error}", path.display()) })
 }
 
-fn toggle_toml(text: &str, enabled: Option<bool>) -> Result<(String, bool), String> {
-    let parsed: toml::Value = toml::from_str(text).map_err(|error| format!("parse TOML config: {error}"))?;
-    let current = parsed.get("routing").and_then(|routing| routing.get("enabled")).and_then(toml::Value::as_bool) == Some(true);
-    let value = enabled.unwrap_or(!current);
+fn set_toml(text: &str, section: &str, key: &str, value: &Value) -> String {
+    let line = (!value.is_null()).then(|| format!("{key} = {value}"));
     let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
-    let section = lines.iter().position(|line| line.trim() == "[routing]");
-    match section {
+    let header = format!("[{section}]");
+    match lines.iter().position(|candidate| candidate.trim() == header) {
         Some(start) => {
-            let end = lines.iter().skip(start + 1).position(|line| line.trim_start().starts_with('[')).map(|offset| start + 1 + offset).unwrap_or(lines.len());
-            match (start + 1..end).find(|&index| lines[index].split('=').next().is_some_and(|key| key.trim() == "enabled")) {
-                Some(index) => lines[index] = format!("enabled = {value}"),
-                None => lines.insert(start + 1, format!("enabled = {value}")),
+            let end = lines.iter().skip(start + 1).position(|candidate| candidate.trim_start().starts_with('[')).map(|offset| start + 1 + offset).unwrap_or(lines.len());
+            match ((start + 1..end).find(|&index| lines[index].split('=').next().is_some_and(|name| name.trim() == key)), line) {
+                (Some(index), Some(line)) => lines[index] = line,
+                (Some(index), None) => { lines.remove(index); }
+                (None, Some(line)) => lines.insert(start + 1, line),
+                (None, None) => {}
             }
         }
-        None => { lines.push(String::new()); lines.push("[routing]".into()); lines.push(format!("enabled = {value}")); }
+        None => if let Some(line) = line { lines.push(String::new()); lines.push(header); lines.push(line); },
     }
-    Ok((lines.join("\n") + "\n", value))
+    lines.join("\n") + "\n"
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -149,6 +196,8 @@ pub fn panel(config: &Config, path: Option<&Path>) -> Value {
             "rules": config.rules.len(),
             "claudeCodeRules": config.rules.iter().filter(|rule| rule.host.as_deref() == Some("claude-code")).count(),
             "consentMode": config.consent.mode,
+            "consentStyle": config.consent.style,
+            "askBelow": config.consent.ask_below,
             "swap": config.routing.swap,
             "efforts": crate::protocol::RoutingClass::ALL.iter().map(|class| (class.as_str(), config.effort.level(class))).collect::<BTreeMap<_, _>>(),
             "configPath": path,
@@ -229,6 +278,26 @@ fn write_preferences(path: &Path, preferences: &[Preference]) -> Result<(), Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn consent_styles_edit_json_and_toml() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.json");
+        fs::write(&path, r#"{"routing":{"enabled":true},"consent":{"mode":"always-accept","declineOnTimeout":true}}"#).unwrap();
+        assert_eq!(set_consent(&path, Some("menu"), Some(Some(0.8))).unwrap(), "consent menu: pick the effort in a menu, asked only below 80% confidence");
+        let value: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(value["consent"], serde_json::json!({ "mode": "interactive", "declineOnTimeout": true, "style": "menu", "askBelow": 0.8 }));
+        assert_eq!(set_consent(&path, None, Some(None)).unwrap(), "consent menu: pick the effort in a menu");
+        assert_eq!(set_consent(&path, Some("auto"), None).unwrap(), "consent auto: suggestions apply without asking");
+        assert!(set_consent(&path, Some("loud"), None).is_err() && set_consent(&path, None, Some(Some(1.5))).is_err());
+        serde_json::from_str::<crate::config::Config>(&fs::read_to_string(&path).unwrap()).unwrap().validate().unwrap();
+        let toml_path = directory.path().join("config.toml");
+        fs::write(&toml_path, "# mine\n[routing]\nenabled = true\n").unwrap();
+        set_consent(&toml_path, Some("confirm"), Some(Some(0.7))).unwrap();
+        let text = fs::read_to_string(&toml_path).unwrap();
+        assert!(text.starts_with("# mine\n[routing]\nenabled = true\n") && text.contains("[consent]") && text.contains("style = \"confirm\"") && text.contains("askBelow = 0.7"), "{text}");
+        assert_eq!(toml::from_str::<crate::config::Config>(&text).unwrap().consent.ask_below, Some(0.7));
+    }
 
     #[test]
     fn toggles_json_and_preserves_other_keys() {
