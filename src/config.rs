@@ -198,6 +198,10 @@ pub enum ClassSelection {
     Median,
     /// Use the provider's top choice unchanged.
     Argmax,
+    /// Kind by mass, then the hardest tier holding a fifth of that kind's
+    /// mass. Against a provider that errs one tier low (Jev), the fewest
+    /// too-low efforts.
+    Upper,
 }
 
 impl Default for RoutingConfig { fn default() -> Self { Self { enabled: false, default_mode: RoutingMode::Advisory, fail_open: true, min_confidence: 0.0, allowed_task_types: Vec::new(), class_selection: ClassSelection::default(), cache_aware: true, swap: Swap::default() } } }
@@ -244,9 +248,13 @@ pub struct TelemetryConfig {
     pub enabled: bool,
     #[serde(default)]
     pub debug_capture: bool,
+    /// Also record the redacted request and context the provider saw, so a
+    /// trial's decisions can be labelled afterwards. Local only; off by default.
+    #[serde(default)]
+    pub capture_prompts: bool,
 }
 
-impl Default for TelemetryConfig { fn default() -> Self { Self { enabled: true, debug_capture: false } } }
+impl Default for TelemetryConfig { fn default() -> Self { Self { enabled: true, debug_capture: false, capture_prompts: false } } }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -377,6 +385,7 @@ impl Config {
             "gatewayAllowlistedTargets": self.gateway.upstream_allowlist.len(),
             "telemetryEnabled": self.telemetry.enabled,
             "debugCaptureOptIn": self.telemetry.debug_capture,
+            "capturePrompts": self.telemetry.capture_prompts,
             "consentMode": format!("{:?}", self.consent.mode).to_lowercase()
         })
     }

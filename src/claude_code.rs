@@ -295,7 +295,7 @@ pub fn model_ids(target: &str, current: Option<&str>, table: Option<&crate::pric
 pub fn mod_decision(decision: &NormalizedDecision, event: &NormalizedEvent, table: Option<&crate::prices::PriceTable>, remembered: impl Fn(&str) -> Option<bool>) -> Value {
     let current = event.current_model.as_ref().map(|state| state.model.as_str());
     let current_effort = event.current_model.as_ref().and_then(|state| state.variant.as_deref());
-    let mut output = json!({ "action": "none", "record": false, "current": current, "currentEffort": current_effort, "code": decision.diagnostic.code, "message": decision.diagnostic.message });
+    let mut output = json!({ "action": "none", "record": false, "current": current, "currentEffort": current_effort, "code": decision.diagnostic.code, "message": decision.diagnostic.message, "correlationId": decision.correlation_id });
     // A class that changes nothing (same effort, a warm cache) is still shown.
     if let Some(class) = decision.telemetry.as_ref().and_then(|telemetry| telemetry.routing_class.as_ref()) { output["routingClass"] = json!(class); }
     if let Some(effort) = decision.diagnostic.details.get("suggestedEffort") { output["effort"] = effort.clone(); }
@@ -710,7 +710,7 @@ not json
         let mut sticky = decision(DecisionOutcome::Allow, None);
         sticky.diagnostic = Diagnostic::info("cache_sticky", "keeping high effort reuses 80000 cached context tokens");
         sticky.diagnostic.details = json!({ "effort": "high", "suggestedEffort": "low" });
-        sticky.telemetry = Some(crate::protocol::RoutingEvent { correlation_id: "c".into(), host: "claude-code".into(), routing_class: Some(RoutingClass::CodeSimple), task_type: None, mode: RoutingMode::Advisory, policy_outcome: "cache-sticky".into(), latency_ms: 0, error_category: None, model: None, suggested_model: None, accepted: None, effort: None, debug_capture: None });
+        sticky.telemetry = Some(crate::protocol::RoutingEvent { correlation_id: "c".into(), host: "claude-code".into(), routing_class: Some(RoutingClass::CodeSimple), task_type: None, mode: RoutingMode::Advisory, policy_outcome: "cache-sticky".into(), latency_ms: 0, error_category: None, model: None, suggested_model: None, accepted: None, effort: None, probabilities: None, provider_model: None, capture: None, debug_capture: None });
         let held = mod_decision(&sticky, &event, None, none);
         assert_eq!((held["action"].as_str(), held["code"].as_str(), held["routingClass"].as_str(), held["effort"].as_str()), (Some("none"), Some("cache_sticky"), Some("code_simple"), Some("low")));
     }

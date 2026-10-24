@@ -232,9 +232,9 @@ test('an accepted effort keeps the model and holds for the following turns', asy
 })
 
 test('keeping the effort asks with the effort wording and changes nothing', async ($, on) => {
-  const state = engine(on, { ...EFFORT, currentEffort: 'medium' }, 'Keep medium effort')
+  const state = engine(on, { ...EFFORT, currentEffort: 'medium', correlationId: 's1r-1' }, 'Keep medium effort')
   expect(await turn($, state)).toEqual({ model: 'claude-sonnet-5-5', effort: 'medium' })
-  expect(state.calls.find(call => call[0] === 'choice')).toEqual(['choice', '--current', 'claude-sonnet-5-5', '--current-variant', 'medium', '--suggested', 'claude-sonnet-5-5', '--variant', 'xhigh', '--accept', 'no'])
+  expect(state.calls.find(call => call[0] === 'choice')).toEqual(['choice', '--current', 'claude-sonnet-5-5', '--current-variant', 'medium', '--suggested', 'claude-sonnet-5-5', '--variant', 'xhigh', '--accept', 'no', '--correlation', 's1r-1'])
 })
 
 test("the session's own /effort wins and pauses automatic effort", async ($, on) => {
@@ -245,6 +245,7 @@ test("the session's own /effort wins and pauses automatic effort", async ($, on)
   // The person ran /effort high: the session's requests now name high.
   expect((await turn($, state, 'next', 'turn-2', 'high')).effort).toBe('high')
   expect(state.toasts.at(-1)).toContain('automatic effort is paused')
+  expect(state.calls).toContainEqual(['override', '--session', 'session-1', '--model', 'claude-sonnet-5-5', '--effort', 'high', '--from', 'xhigh'])
   const decided = state.calls.filter(call => call[0] === 'decide').length
   expect((await turn($, state, 'again', 'turn-3', 'high')).effort).toBe('high')
   expect(state.calls.filter(call => call[0] === 'decide')).toHaveLength(decided)

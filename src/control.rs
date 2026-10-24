@@ -72,6 +72,8 @@ pub struct Stats {
     pub by_host: BTreeMap<String, u64>,
     /// Effort swaps by the effort the turn ran at.
     pub efforts: BTreeMap<String, u64>,
+    /// Manual effort changes over the router's (`/effort`).
+    pub overrides: u64,
 }
 
 /// Reads OpenCode's `usage.jsonl` (actual choices) and the core's
@@ -85,6 +87,7 @@ pub fn read_stats() -> Stats {
         let Ok(text) = fs::read_to_string(path) else { continue; };
         for entry in text.lines().filter_map(|line| serde_json::from_str::<Value>(line).ok()) {
             let host = entry.get("host").and_then(Value::as_str).unwrap_or("unknown");
+            if entry.get("kind").and_then(Value::as_str) == Some("override") { stats.overrides += 1; continue; }
             if native && host == "opencode" { continue; }
             // Held Claude Code prompts are counted when resolved (usage.jsonl).
             if native && entry.get("policyOutcome").and_then(Value::as_str) == Some("consent-requested") { continue; }
@@ -112,7 +115,8 @@ pub fn format_stats(stats: &Stats) -> String {
     let hosts = stats.by_host.iter().map(|(host, count)| format!("{host} {count}")).collect::<Vec<_>>().join(", ");
     let rate = if stats.answered > 0 { format!("{:.0}%", 100.0 * stats.accepted as f64 / stats.answered as f64) } else { "—".into() };
     let efforts = if stats.efforts.is_empty() { String::new() } else { format!(" By effort: {}.", stats.efforts.iter().map(|(effort, count)| format!("{effort} {count}")).collect::<Vec<_>>().join(", ")) };
-    format!("Prompts: {} ({hosts}). By model: {models}.{efforts} Answered suggestions: {} (accepted {}, {rate}). Advisory suggestions: {}.", stats.calls, stats.answered, stats.accepted, stats.advised)
+    let overrides = if stats.overrides > 0 { format!(" Manual effort overrides: {}.", stats.overrides) } else { String::new() };
+    format!("Prompts: {} ({hosts}). By model: {models}.{efforts} Answered suggestions: {} (accepted {}, {rate}). Advisory suggestions: {}.{overrides}", stats.calls, stats.answered, stats.accepted, stats.advised)
 }
 
 fn provider_ready(config: &Config) -> bool {
@@ -150,7 +154,7 @@ pub fn panel(config: &Config, path: Option<&Path>) -> Value {
             "configPath": path,
             "providerLog": provider_log_path(),
         },
-        "stats": { "calls": stats.calls, "models": stats.models, "answered": stats.answered, "accepted": stats.accepted, "advised": stats.advised, "byHost": stats.by_host, "efforts": stats.efforts },
+        "stats": { "calls": stats.calls, "models": stats.models, "answered": stats.answered, "accepted": stats.accepted, "advised": stats.advised, "byHost": stats.by_host, "efforts": stats.efforts, "overrides": stats.overrides },
         "preferences": read_preferences(),
     })
 }

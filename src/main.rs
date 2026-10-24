@@ -49,6 +49,11 @@ fn main() {
         Some("hook") => command_hook(&args, config),
         Some("decide") => command_decide(config),
         Some("choice") => command_choice(&args, &config),
+        // `override --session S --model M --effort E [--from F]`: a manual /effort over the mod's.
+        Some("override") => match (argument(&args, "--session"), argument(&args, "--model"), argument(&args, "--effort")) {
+            (Some(session), Some(model), Some(effort)) => { system1router_core::telemetry::record_override(&config, "claude-code", session, model, effort, argument(&args, "--from")); print_json(json!({ "recorded": true })); }
+            _ => print_json(json!({ "recorded": false, "error": "--session, --model and --effort are required" })),
+        },
         Some("panel") => print_json(control::panel(&config, config_path.as_deref())),
         Some("forget") => match control::forget(args.get(1).map(String::as_str).filter(|key| !key.starts_with("--"))) {
             Ok(count) => print_json(json!({ "forgotten": count })),
@@ -399,8 +404,8 @@ fn command_hook(args: &[String], config: Config) {
             return;
         }
         let session = payload.get("session_id").and_then(Value::as_str).unwrap_or_default().to_string();
-        // The mod routes this session itself.
-        if claude_code::mod_active(&session) { print_json(json!({})); return; }
+        // The mod routes this session itself, and only the mod can change a turn's effort.
+        if claude_code::mod_active(&session) || config.routing.swap == system1router_core::config::Swap::Effort { print_json(json!({})); return; }
         // Slash commands such as /model do not consume the held prompt.
         if !prompt.trim_start().starts_with('/') {
             if let Some(held) = claude_code::take_held(&session) {
@@ -409,7 +414,7 @@ fn command_hook(args: &[String], config: Config) {
                     let cwd = payload.get("cwd").and_then(Value::as_str);
                     let now = claude_code::configured_model(cwd).or(held.current.clone());
                     let accepted = now.as_deref().is_some_and(|model| claude_code::same_model(model, &held.suggested) || model == held.suggested);
-                    system1router_core::telemetry::record_choice(&config, "claude-code", now.as_deref(), &held.suggested, accepted, None);
+                    system1router_core::telemetry::record_choice(&config, "claude-code", now.as_deref(), &held.suggested, accepted, json!({}));
                     print_json(output);
                     return;
                 }
@@ -446,14 +451,14 @@ fn command_decide(config: Config) {
 }
 
 /// Records the answer the mod got: `choice --current M [--current-variant V]
-/// --suggested M [--variant V] --accept yes|no [--remember]`. The same model
+/// --suggested M [--variant V] --accept yes|no [--remember] [--correlation ID]`. The same model
 /// on both sides is an effort swap, told apart by the variants.
 fn command_choice(args: &[String], config: &Config) {
     let (Some(current), Some(suggested)) = (argument(args, "--current"), argument(args, "--suggested")) else { print_json(json!({ "recorded": false, "error": "--current and --suggested are required" })); return; };
     let accepted = argument(args, "--accept") == Some("yes");
     let (variant, current_variant) = (argument(args, "--variant"), argument(args, "--current-variant"));
     let effort = (current == suggested || claude_code::same_model(current, suggested)).then(|| if accepted { variant } else { current_variant }).flatten();
-    system1router_core::telemetry::record_choice(config, "claude-code", Some(if accepted { suggested } else { current }), suggested, accepted, effort);
+    system1router_core::telemetry::record_choice(config, "claude-code", Some(if accepted { suggested } else { current }), suggested, accepted, json!({ "effort": effort, "correlationId": argument(args, "--correlation") }));
     let current_variant = current_variant.filter(|_| current == suggested || claude_code::same_model(current, suggested));
     let remembered = args.iter().any(|arg| arg == "--remember").then(|| control::remember(&control::model_label("anthropic", current, current_variant), &control::model_label("anthropic", suggested, variant), accepted));
     match remembered { Some(Err(error)) => print_json(json!({ "recorded": true, "remembered": false, "error": error })), remembered => print_json(json!({ "recorded": true, "remembered": remembered.is_some() })) }

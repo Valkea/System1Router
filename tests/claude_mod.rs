@@ -127,3 +127,43 @@ fn an_effort_applied_without_asking_is_counted_by_effort() {
     assert_eq!((decided["action"].as_str(), decided["effort"].as_str()), (Some("switch"), Some("low")));
     assert!(cli(&["stats", "--config", config], "").contains("By effort: low 1."));
 }
+
+#[test]
+fn a_trial_logs_what_jev_saw_and_the_overrides_and_the_hook_stays_out() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = directory.path().join("config.json");
+    std::fs::write(&config, r#"{"routing":{"enabled":true,"swap":"effort","classSelection":"upper"},"consent":{"mode":"always-accept"},"telemetry":{"capturePrompts":true},"providers":{"selected":"jev","jev":{"baseUrl":"http://127.0.0.1:9","credentialEnv":null}}}"#).unwrap();
+    let response = serde_json::json!({ "model": "jev-1.14.0", "answers": {
+        "routing_class": { "choice": "code_simple", "confidence": 0.45, "probabilities": { "code_simple": 0.45, "code_moderate": 0.35, "code_hard": 0.2 } },
+        "task_type": { "choice": "debugging", "confidence": 0.9 },
+        "context": { "score": 2.0, "confidence": 0.9 } } }).to_string();
+    let cli = |arguments: &[&str], stdin: &str, mod_session: Option<&str>| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_system1router"));
+        command.args(arguments).env("XDG_STATE_HOME", directory.path()).env_remove("SYSTEM1ROUTER_TELEMETRY").env_remove("SYSTEM1ROUTER_TELEMETRY_DISABLED").env_remove("SYSTEM1ROUTER_CONSENT")
+            .env("SYSTEM1ROUTER_JEV_RESPONSE", &response).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+        match mod_session { Some(session) => command.env("SYSTEM1ROUTER_CLAUDE_MOD", session), None => command.env_remove("SYSTEM1ROUTER_CLAUDE_MOD") };
+        let mut child = command.spawn().unwrap();
+        child.stdin.take().unwrap().write_all(stdin.as_bytes()).unwrap();
+        String::from_utf8(child.wait_with_output().unwrap().stdout).unwrap()
+    };
+    let config = config.to_str().unwrap();
+    let transcript = directory.path().join("s.jsonl");
+    std::fs::write(&transcript, serde_json::json!({ "type": "assistant", "message": { "model": "claude-opus-5-5", "content": [{ "type": "text", "text": "CI hangs in 3 of 50 runs: a child waits on stdin while the parent waits on stdout." }] } }).to_string()).unwrap();
+    let payload = serde_json::json!({ "session_id": "s", "cwd": "/tmp", "prompt": "fix it", "model": "claude-opus-5-5", "effort": "medium", "transcript_path": transcript, "hook_event_name": "UserPromptSubmit" }).to_string();
+    let decided: Value = serde_json::from_str(&cli(&["decide", "--config", config], &payload, Some("s"))).unwrap();
+    assert_eq!((decided["action"].as_str(), decided["effort"].as_str(), decided["routingClass"].as_str()), (Some("switch"), Some("xhigh"), Some("code_hard")), "a fifth of the mass on code_hard: {decided}");
+    let events = || std::fs::read_to_string(directory.path().join("system1router/events.jsonl")).unwrap_or_default();
+    let logged: Value = serde_json::from_str(events().lines().last().unwrap()).unwrap();
+    assert_eq!(logged["correlationId"], decided["correlationId"]);
+    assert_eq!((logged["providerModel"].as_str(), logged["probabilities"]["code_hard"].as_f64().map(|value| (value * 100.0).round())), (Some("jev-1.14.0"), Some(20.0)));
+    assert_eq!((logged["capture"]["query"].as_str(), logged["capture"]["currentEffort"].as_str()), (Some("fix it"), Some("medium")));
+    assert!(logged["capture"]["context"].as_str().is_some_and(|context| context.contains("CI hangs")), "{logged}");
+
+    assert_eq!(serde_json::from_str::<Value>(&cli(&["override", "--config", config, "--session", "s", "--model", "claude-opus-5-5", "--effort", "high", "--from", "xhigh"], "", None)).unwrap()["recorded"], true);
+    assert!(cli(&["stats", "--config", config], "", None).contains("Manual effort overrides: 1."));
+
+    // Without the mod, the hook cannot change effort, so it does not classify.
+    let before = events().lines().count();
+    assert_eq!(cli(&["hook", "--host", "claude-code", "--config", config], &payload, None).trim(), "{}");
+    assert_eq!(events().lines().count(), before);
+}

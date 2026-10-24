@@ -43,6 +43,8 @@ type Decision = {
   confidence?: number
   reason?: string
   code?: string
+  /** The decision's id in `events.jsonl`, so its answer can be joined to it. */
+  correlationId?: string
 }
 
 type Choice = { model: string; ids: string[]; current: string; effort: Effort | null }
@@ -153,7 +155,11 @@ async function steer($: EngineInterface, e: TurnStepInput): Promise<Effort | und
   if (state.base === observed) return state.applied ?? undefined
   const manual = state.base !== null && state.applied !== null
   await update($, effortState, s => ({ applied: manual ? null : s.applied, base: observed, paused: s.paused || manual }))
-  if (manual) $.ui.toast(`S1R: the session's effort is now ${observed}; automatic effort is paused for this session (/s1router resumes it)`)
+  if (manual) {
+    $.ui.toast(`S1R: the session's effort is now ${observed}; automatic effort is paused for this session (/s1router resumes it)`)
+    // The strongest sign the router was wrong; recorded for its evaluation.
+    await run($, ['override', '--session', await $.session.id(), '--model', e.model, '--effort', observed, ...(state.applied ? ['--from', state.applied] : [])]).catch(() => undefined)
+  }
   return manual ? undefined : (state.applied ?? undefined)
 }
 
@@ -203,7 +209,8 @@ async function settle($: EngineInterface, decision: Decision): Promise<Choice | 
   if (decision.record) {
     const variant = decision.variant ? ['--variant', decision.variant] : []
     const before = isEffort && from ? ['--current-variant', from] : []
-    await run($, ['choice', '--current', current, ...before, '--suggested', model, ...variant, '--accept', accept ? 'yes' : 'no', ...(remember ? ['--remember'] : [])])
+    const correlation = decision.correlationId ? ['--correlation', decision.correlationId] : []
+    await run($, ['choice', '--current', current, ...before, '--suggested', model, ...variant, '--accept', accept ? 'yes' : 'no', ...(remember ? ['--remember'] : []), ...correlation])
   }
   const entry: Routed = { kind: isEffort ? 'effort' : 'model', routingClass: decision.routingClass ?? 'unknown', confidence: decision.confidence ?? 0, current, model, effort, from, outcome: accept ? 'switched' : 'kept', how }
   await update($, routed, list => [...list, entry].slice(-HISTORY))

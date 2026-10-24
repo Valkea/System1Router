@@ -396,6 +396,16 @@ pub struct RoutingEvent {
     /// The effort the request runs at, after an answered effort swap.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+    /// The provider's class distribution and model, to compare class
+    /// selections offline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probabilities: Option<std::collections::BTreeMap<String, f32>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_model: Option<String>,
+    /// The redacted request and context the provider saw
+    /// (`telemetry.capturePrompts`), to label decisions afterwards.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture: Option<Value>,
     #[serde(default)]
     pub debug_capture: Option<Value>,
 }

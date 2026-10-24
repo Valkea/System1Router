@@ -160,4 +160,4 @@ The protocol exit codes are `10` malformed event, `11` unsupported version, `12`
 
 ## Privacy
 
-Provider input is bounded and redacted. Local telemetry stores correlation IDs, classification metadata, policy outcome, mode, latency, and error category. Prompts, credentials, attachments, tool arguments, and model output are excluded by default. Set `SYSTEM1ROUTER_TELEMETRY_DISABLED=1` to disable local telemetry and enable debug capture only through an explicit, redacted deployment-specific mechanism.
+Provider input is bounded and redacted. Local telemetry stores correlation IDs, classification metadata, policy outcome, mode, latency, and error category. Prompts, credentials, attachments, tool arguments, and model output are excluded by default; `telemetry.capturePrompts` opts in to recording the redacted request and context the provider saw, locally, for evaluating a trial. Set `SYSTEM1ROUTER_TELEMETRY_DISABLED=1` to disable local telemetry and enable debug capture only through an explicit, redacted deployment-specific mechanism.

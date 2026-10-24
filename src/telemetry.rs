@@ -36,20 +36,38 @@ pub fn record(decision: &NormalizedDecision, request: &NormalizedEvent, config: 
         event.model = event.suggested_model.clone().or(event.model);
     }
     if config.telemetry.debug_capture && std::env::var("SYSTEM1ROUTER_DEBUG_CAPTURE").ok().as_deref() == Some("1") { event.debug_capture = Some(safe_request_payload(&request.request, &config.redaction)); }
+    // What the provider saw, only for classified requests.
+    if config.telemetry.capture_prompts && event.routing_class.is_some() {
+        let input = crate::redaction::project_event(request, &config.redaction);
+        event.capture = Some(serde_json::json!({ "sessionId": request.session_id, "currentEffort": request.current_model.as_ref().and_then(|model| model.variant.clone()), "query": input.query, "context": crate::classification::render_context(&input.context) }));
+    }
     if let Ok(line) = serde_json::to_string(&event) {
         if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) { let _ = writeln!(file, "{line}"); }
     }
 }
 
 /// Appends a resolved suggestion to `usage.jsonl`, the file OpenCode also
-/// writes, so stats count what the user actually chose. `effort` is the
-/// effort the turn ran at, for an effort swap.
-pub fn record_choice(config: &Config, host: &str, model: Option<&str>, suggested: &str, accepted: bool, effort: Option<&str>) {
+/// writes, so stats count what the user actually chose. `extra` adds fields:
+/// `effort`, the effort the turn ran at for an effort swap, and
+/// `correlationId`, the decision's in `events.jsonl`.
+pub fn record_choice(config: &Config, host: &str, model: Option<&str>, suggested: &str, accepted: bool, extra: serde_json::Value) {
     if !config.telemetry.enabled || std::env::var("SYSTEM1ROUTER_TELEMETRY_DISABLED").is_ok() { return; }
     let Some(directory) = crate::control::state_directory() else { return; };
     let _ = fs::create_dir_all(&directory);
     let timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|value| value.as_millis() as u64).unwrap_or_default();
     let mut line = serde_json::json!({ "host": host, "model": model, "suggestedModel": suggested, "accepted": accepted, "timestampMs": timestamp });
-    if let Some(effort) = effort { line["effort"] = effort.into(); }
+    if let (Some(line), Some(extra)) = (line.as_object_mut(), extra.as_object()) { line.extend(extra.iter().filter(|(_, value)| !value.is_null()).map(|(key, value)| (key.clone(), value.clone()))); }
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(directory.join("usage.jsonl")) { let _ = writeln!(file, "{line}"); }
+}
+
+/// Appends a manual effort change that overrode the router's (`/effort` while
+/// the mod held another effort): the strongest sign the router was wrong.
+/// `usage.jsonl` keeps it beside the answers; stats count it apart.
+pub fn record_override(config: &Config, host: &str, session: &str, model: &str, effort: &str, from: Option<&str>) {
+    if !config.telemetry.enabled || std::env::var("SYSTEM1ROUTER_TELEMETRY_DISABLED").is_ok() { return; }
+    let Some(directory) = crate::control::state_directory() else { return; };
+    let _ = fs::create_dir_all(&directory);
+    let timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|value| value.as_millis() as u64).unwrap_or_default();
+    let line = serde_json::json!({ "kind": "override", "host": host, "sessionId": session, "model": model, "effort": effort, "from": from, "timestampMs": timestamp });
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(directory.join("usage.jsonl")) { let _ = writeln!(file, "{line}"); }
 }

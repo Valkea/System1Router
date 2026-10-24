@@ -354,7 +354,11 @@ fn answer_confidence(answer: &Value) -> f32 {
 /// ordinal scales (question/code × simple/moderate/hard), so the kind is
 /// chosen by total probability mass and the tier by the median of that
 /// kind's distribution. Unlike argmax this does not pick "simple" when most
-/// of the mass says "moderate or harder", which is the costly error.
+/// of the mass says "moderate or harder", which is the costly error. `Upper`
+/// takes the hardest tier still holding a fifth of the kind's mass: Jev
+/// errs one tier low, and this corrects most of it (experiments/RESULTS.md).
+const UPPER_SHARE: f32 = 0.2;
+
 pub fn select_class(mut result: RoutingClassification, selection: ClassSelection) -> RoutingClassification {
     if selection == ClassSelection::Argmax { return result; }
     let Some(probabilities) = &result.class_probabilities else { return result; };
@@ -375,6 +379,7 @@ pub fn select_class(mut result: RoutingClassification, selection: ClassSelection
         cumulative += value;
         if cumulative >= kind_total / 2.0 { tier = index; break; }
     }
+    if selection == ClassSelection::Upper { tier = (0..3).rev().find(|&index| kind[index..].iter().sum::<f32>() >= kind_total * UPPER_SHARE).unwrap_or(0); }
     let selected = RoutingClass::from_parts(code, tier);
     if selected != result.routing_class {
         result.context_signals.push(format!("class_adjusted_from_{}", result.routing_class));
@@ -482,6 +487,17 @@ mod tests {
         assert_eq!(result.routing_class, RoutingClass::CodeModerate);
         assert!((result.confidence.routing_class - 0.35).abs() < 1e-6);
         assert!(result.context_signals.contains(&"class_adjusted_from_code_simple".to_string()));
+    }
+
+    #[test]
+    fn upper_tier_takes_the_hardest_tier_holding_a_fifth_of_the_mass() {
+        let result = select_class(distribution(&[("code_simple", 0.45), ("code_moderate", 0.35), ("code_hard", 0.20)], RoutingClass::CodeSimple), ClassSelection::Upper);
+        assert_eq!(result.routing_class, RoutingClass::CodeHard);
+        assert!(result.context_signals.contains(&"class_adjusted_from_code_simple".to_string()));
+        let moderate = select_class(distribution(&[("question_simple", 0.6), ("question_moderate", 0.3), ("question_hard", 0.1)], RoutingClass::QuestionSimple), ClassSelection::Upper);
+        assert_eq!(moderate.routing_class, RoutingClass::QuestionModerate, "0.1 is below a fifth, 0.4 is above");
+        let sure = select_class(distribution(&[("question_simple", 0.95), ("question_moderate", 0.05)], RoutingClass::QuestionSimple), ClassSelection::Upper);
+        assert_eq!(sure.routing_class, RoutingClass::QuestionSimple);
     }
 
     #[test]
