@@ -1,0 +1,150 @@
+{"text": "What does `git rebase --onto` do?", "label": "question_simple"}
+{"text": "Is `Vec::with_capacity` faster than `Vec::new` when I know the size?", "label": "question_simple"}
+{"text": "What's the difference between `let` and `const` in JavaScript?", "label": "question_simple"}
+{"text": "Which port does Postgres listen on by default?", "label": "question_simple"}
+{"text": "how do I list all docker containers including stopped ones", "label": "question_simple"}
+{"text": "What is the time complexity of inserting into a binary heap?", "label": "question_simple"}
+{"text": "Does Python's `dict` preserve insertion order?", "label": "question_simple"}
+{"text": "what does the `?` operator do in Rust", "label": "question_simple"}
+{"text": "What's the flag to make grep case-insensitive?", "label": "question_simple"}
+{"text": "Is JSON allowed to have trailing commas?", "label": "question_simple"}
+{"text": "What does HTTP status 409 mean?", "label": "question_simple"}
+{"text": "how do I undo the last commit but keep the changes", "label": "question_simple"}
+{"text": "What's the default branch name created by `git init` nowadays?", "label": "question_simple"}
+{"text": "In TypeScript, what's the difference between `unknown` and `any`?", "label": "question_simple"}
+{"text": "what is a mutex", "label": "question_simple"}
+{"text": "Which file does cargo use to pin dependency versions?", "label": "question_simple"}
+{"text": "What does `set -euo pipefail` do?", "label": "question_simple"}
+{"text": "Can I use `await` at the top level of an ES module?", "label": "question_simple"}
+{"text": "what's the shortcut to search history in zsh", "label": "question_simple"}
+{"text": "What does CORS stand for?", "label": "question_simple"}
+{"text": "Is `localhost` the same as `127.0.0.1`?", "label": "question_simple"}
+{"text": "how do I check which version of node is installed", "label": "question_simple"}
+{"text": "What does the `#[derive(Debug)]` attribute generate?", "label": "question_simple"}
+{"text": "What's the SQL keyword to remove duplicate rows from a result?", "label": "question_simple"}
+{"text": "What unit is `Duration::from_millis` in?", "label": "question_simple"}
+{"text": "Why does my React component re-render every time the parent renders even though its props look the same?", "label": "question_moderate"}
+{"text": "Explain how this repository's config loading works and in which order the files are read.", "label": "question_moderate"}
+{"text": "What's the difference between optimistic and pessimistic locking, and which one fits a booking API with rare conflicts?", "label": "question_moderate"}
+{"text": "Why would `cargo test` pass locally but fail in CI with \"address already in use\"?", "label": "question_moderate"}
+{"text": "How does the classification request flow from the OpenCode plugin to the Rust binary and back?", "label": "question_moderate"}
+{"text": "Compare `tokio::spawn` and `std::thread::spawn` for running a blocking file parser.", "label": "question_moderate"}
+{"text": "Can you explain what this regex matches: `^(?:[a-z0-9-]+\\.)+[a-z]{2,}$` and where it would fail?", "label": "question_moderate"}
+{"text": "Why is my Postgres query using a sequential scan even though there's an index on created_at?", "label": "question_moderate"}
+{"text": "Walk me through what happens when I run `git pull --rebase` with local uncommitted changes.", "label": "question_moderate"}
+{"text": "How should I structure error types in a Rust library versus a binary?", "label": "question_moderate"}
+{"text": "What does the policy resolver do when two rules match the same class with the same priority?", "label": "question_moderate"}
+{"text": "Why does this test only fail when run together with the others?", "label": "question_moderate"}
+{"text": "Explain the difference between prompt caching TTLs and when the 1h TTL is worth it.", "label": "question_moderate"}
+{"text": "How do JWT refresh tokens work, and where should I store them in a single-page app?", "label": "question_moderate"}
+{"text": "What are the trade-offs between storing timestamps as UTC epoch millis versus ISO strings in JSONL logs?", "label": "question_moderate"}
+{"text": "Summarize what changed in the last three commits and why.", "label": "question_moderate"}
+{"text": "How does Bun's test runner differ from Jest regarding module mocking?", "label": "question_moderate"}
+{"text": "Why does `Arc<Mutex<T>>` deadlock here when I call `lock()` inside the closure?", "label": "question_moderate"}
+{"text": "Explain how the consent dialog timeout works in the TUI plugin.", "label": "question_moderate"}
+{"text": "What happens to in-flight requests when a Kubernetes pod receives SIGTERM?", "label": "question_moderate"}
+{"text": "How is the stats percentage computed and why might it differ from what OpenCode shows?", "label": "question_moderate"}
+{"text": "Why is my Docker image 1.2 GB and what are the usual ways to shrink it?", "label": "question_moderate"}
+{"text": "What's the difference between `serde(default)` on a field and on the struct?", "label": "question_moderate"}
+{"text": "Explain why the hook exits 0 even when routing fails.", "label": "question_moderate"}
+{"text": "How do I choose between SQLite and Postgres for a small self-hosted app with a few writers?", "label": "question_moderate"}
+{"text": "Should we split the router core into a long-running daemon instead of spawning the binary per prompt? Weigh latency, memory, crash isolation and upgrade story.", "label": "question_hard"}
+{"text": "Review the overall architecture of this project and tell me which design decisions will hurt us most when we add five more hosts.", "label": "question_hard"}
+{"text": "Our p99 latency doubled after the last release but p50 is unchanged; where would you look first and why, given the code we have?", "label": "question_hard"}
+{"text": "Is it safe to cache classifications across sessions keyed by prompt hash? Think about privacy, staleness and cache poisoning.", "label": "question_hard"}
+{"text": "Compare event sourcing versus a mutable state table for the usage and consent data, considering migrations and concurrent writers from two hosts.", "label": "question_hard"}
+{"text": "Design a strategy to evaluate whether routing actually saves money without hurting answer quality. What would you measure and how do we avoid fooling ourselves?", "label": "question_hard"}
+{"text": "What are the failure modes of fail-open routing, and can any of them leak prompts to a provider when the user has disabled routing?", "label": "question_hard"}
+{"text": "Given our constraints, should the classifier run locally or stay a hosted API? Consider latency, accuracy drift, cost, privacy and maintenance.", "label": "question_hard"}
+{"text": "How would you threat-model the plugin system: a malicious plugin, a compromised binary on PATH, and a poisoned config file?", "label": "question_hard"}
+{"text": "We see sporadic data loss in consent-preferences.json when OpenCode and Claude Code write at the same time. Explain all the ways this can happen and what a robust fix looks like.", "label": "question_hard"}
+{"text": "Is the median-tier class selection statistically sound, or are there distributions where it does worse than argmax? Reason it through.", "label": "question_hard"}
+{"text": "Evaluate whether we should support Windows natively or only through WSL, considering hooks, paths, signals and installer complexity.", "label": "question_hard"}
+{"text": "Our test suite takes 9 minutes; what's a principled approach to speed it up without losing coverage of the integration contracts?", "label": "question_hard"}
+{"text": "What are the long-term risks of depending on an early-access mod API, and how should we structure the code to survive breaking changes?", "label": "question_hard"}
+{"text": "How would you design a self-improving routing classifier that learns from user overrides without drifting or amplifying bias?", "label": "question_hard"}
+{"text": "Compare three ways to version the hook protocol and explain which one lets old plugins keep working with a newer binary.", "label": "question_hard"}
+{"text": "Is it a good idea to let the router pick efforts above the user's session default? Discuss cost, user trust and failure cases.", "label": "question_hard"}
+{"text": "Explain the consistency guarantees we can actually offer for stats when telemetry writes are append-only JSONL from several processes.", "label": "question_hard"}
+{"text": "Assess the memory safety and concurrency risks in the gateway server code and rank them by severity.", "label": "question_hard"}
+{"text": "We want multi-tenant support for teams; what has to change across config, telemetry, privacy and consent?", "label": "question_hard"}
+{"text": "Why might a cheaper model end up costing more per completed task, and how should the router account for it?", "label": "question_hard"}
+{"text": "Critique our redaction approach: what kinds of secrets would slip through, and is a regex-based design fundamentally adequate?", "label": "question_hard"}
+{"text": "Should routing decisions be explainable to the user, and what's the minimum explanation that is honest without being noise?", "label": "question_hard"}
+{"text": "Analyze the trade-offs of storing provider credentials in a dotenv file versus the OS keychain across Linux, macOS and Windows.", "label": "question_hard"}
+{"text": "How do we migrate existing users' configs to a new schema without breaking hosts that pin older plugin versions?", "label": "question_hard"}
+{"text": "Rename the variable `tmp` to `buffer` in parse_line.", "label": "code_simple"}
+{"text": "fix the typo in the README: \"recieve\" should be \"receive\"", "label": "code_simple"}
+{"text": "Add a `--version` flag to the CLI that prints the crate version.", "label": "code_simple"}
+{"text": "Change the default consent timeout from 15 seconds to 30.", "label": "code_simple"}
+{"text": "Bump serde to the latest 1.x in Cargo.toml.", "label": "code_simple"}
+{"text": "Add a missing semicolon at the end of line 42 in server.ts.", "label": "code_simple"}
+{"text": "Make the error message in validate() mention the field name.", "label": "code_simple"}
+{"text": "delete the unused import of HashMap in policy.rs", "label": "code_simple"}
+{"text": "Add a doc comment to `effort_rank` explaining the order.", "label": "code_simple"}
+{"text": "Sort the list of hosts alphabetically in the doctor output.", "label": "code_simple"}
+{"text": "Replace the hard-coded \"S1R\" prefix with a constant.", "label": "code_simple"}
+{"text": "run cargo test and fix the one failing assertion message", "label": "code_simple"}
+{"text": "Add `.DS_Store` to the .gitignore.", "label": "code_simple"}
+{"text": "Rename the test `it_works` to something descriptive.", "label": "code_simple"}
+{"text": "Make `short()` return the input unchanged when it doesn't match the pattern.", "label": "code_simple"}
+{"text": "Add a log line when the config file is missing.", "label": "code_simple"}
+{"text": "Change the status line text from \"classifying…\" to \"thinking about it…\".", "label": "code_simple"}
+{"text": "Add the `--quiet` flag to the cargo command in CLAUDE.md.", "label": "code_simple"}
+{"text": "Update the copyright year in the LICENSE header.", "label": "code_simple"}
+{"text": "Convert this `if let ... else` into a `let ... else`.", "label": "code_simple"}
+{"text": "Add a default value of 4000 to max_context_chars in the example config.", "label": "code_simple"}
+{"text": "fix the clippy warning about needless borrow in main.rs", "label": "code_simple"}
+{"text": "Make the toast message say \"unavailable\" instead of \"not available\".", "label": "code_simple"}
+{"text": "Add `#[must_use]` to the `level` function.", "label": "code_simple"}
+{"text": "Change the dashboard's bar character from █ to ▇.", "label": "code_simple"}
+{"text": "Add a `--json` flag to `system1router stats` that prints the stats as JSON, with a test.", "label": "code_moderate"}
+{"text": "The pane doesn't refresh after toggling routing; find out why and fix it.", "label": "code_moderate"}
+{"text": "Refactor the dotenv parser into its own module and keep all existing tests passing.", "label": "code_moderate"}
+{"text": "Add support for TOML configs in the `toggle` command, including comments preservation.", "label": "code_moderate"}
+{"text": "Implement retry with exponential backoff for the Jev HTTP call, capped by the provider timeout.", "label": "code_moderate"}
+{"text": "Add an `/s1router_forget` slash command to the Claude Code mod that forgets one remembered answer.", "label": "code_moderate"}
+{"text": "Write integration tests for the `choice` command covering accept, decline and remember.", "label": "code_moderate"}
+{"text": "The OpenCode plugin shows the consent dialog twice when two messages are sent quickly; debug and fix it.", "label": "code_moderate"}
+{"text": "Extract the price lookup into a trait so we can mock it in policy tests.", "label": "code_moderate"}
+{"text": "Add a per-host override for effort levels in the config and wire it through the policy.", "label": "code_moderate"}
+{"text": "Make the stats command group results by day for the last 7 days.", "label": "code_moderate"}
+{"text": "Implement a `doctor --fix` mode that creates a missing config from the example.", "label": "code_moderate"}
+{"text": "Port the transcript parser to stream the file line by line instead of reading the tail into memory.", "label": "code_moderate"}
+{"text": "Add a JSON schema for the config file and validate the example against it in CI.", "label": "code_moderate"}
+{"text": "Fix the flaky test that fails when XDG_STATE_HOME is set by another test.", "label": "code_moderate"}
+{"text": "Add a Laya worker health check before each classification, with a cached result.", "label": "code_moderate"}
+{"text": "Make the mod's dashboard show the last 5 decisions with their latency.", "label": "code_moderate"}
+{"text": "Replace the manual JSON building in control.rs with serde structs.", "label": "code_moderate"}
+{"text": "Add pagination to the remembered answers list in the pane.", "label": "code_moderate"}
+{"text": "Implement `system1router export` that writes usage stats to CSV.", "label": "code_moderate"}
+{"text": "The update command doesn't detect a newer prerelease; fix the version comparison and add tests.", "label": "code_moderate"}
+{"text": "Add a configurable list of prompt prefixes that are never routed, like \"!\" or \"#\".", "label": "code_moderate"}
+{"text": "Debug why the hook takes 400ms on cold start and reduce it.", "label": "code_moderate"}
+{"text": "Move the hard-coded model aliases into the config with sensible defaults.", "label": "code_moderate"}
+{"text": "Add a Windows path test for the transcript finder and fix what breaks.", "label": "code_moderate"}
+{"text": "Replace the per-prompt process spawn with a persistent daemon that the plugins talk to over a Unix socket, with fallback to spawning, and keep fail-open semantics.", "label": "code_hard"}
+{"text": "Implement a local ONNX classifier provider with a background model download, versioned weights, and automatic fallback to Jev when it's not ready.", "label": "code_hard"}
+{"text": "Redesign the consent preferences storage to be safe under concurrent writers from several processes on Linux, macOS and Windows.", "label": "code_hard"}
+{"text": "Add end-to-end encryption for the provider debug log and migrate existing logs.", "label": "code_hard"}
+{"text": "Find and fix the race condition that makes the mod sometimes apply the previous turn's model to the next turn.", "label": "code_hard"}
+{"text": "Implement the gateway as a real streaming proxy with request signing, rate limiting per token and graceful shutdown.", "label": "code_hard"}
+{"text": "Rewrite the policy engine to support boolean rule expressions with a parser, precedence and good error messages, without breaking existing configs.", "label": "code_hard"}
+{"text": "Build an online learning loop that retrains the effort classifier nightly from user overrides, with evaluation gates and rollback.", "label": "code_hard"}
+{"text": "Make the whole binary work on Windows: hooks, paths, process spawning and the installer, with CI on all three OSes.", "label": "code_hard"}
+{"text": "Track down the memory leak in the long-running gateway that grows by 50 MB per hour under load.", "label": "code_hard"}
+{"text": "Introduce protocol version 2 with negotiated capabilities while keeping v1 hosts working, and add contract tests for both.", "label": "code_hard"}
+{"text": "Implement sandboxing for the Laya worker process so a compromised model file can't read the user's home directory.", "label": "code_hard"}
+{"text": "Migrate telemetry from JSONL files to SQLite with a schema migration path and concurrent access from both hosts.", "label": "code_hard"}
+{"text": "Audit the redaction code for secret leaks and replace it with a tokenizer-aware redactor that handles multi-line keys.", "label": "code_hard"}
+{"text": "Add multi-provider routing across Anthropic, OpenAI and Google in the gateway with cost-aware fallback and per-request cache accounting.", "label": "code_hard"}
+{"text": "Our CI is intermittently deadlocking in the claude_mod tests; find the root cause across the test harness and the binary and fix it.", "label": "code_hard"}
+{"text": "Implement atomic, resumable self-update for the binary with signature verification.", "label": "code_hard"}
+{"text": "Re-architect the OpenCode plugin to share one TypeScript core with the Claude Code mod, keeping both test suites green.", "label": "code_hard"}
+{"text": "Add a plugin permission model so third-party router plugins can only read redacted prompts.", "label": "code_hard"}
+{"text": "Implement deterministic replay of routing decisions from logs to evaluate a new classifier offline.", "label": "code_hard"}
+{"text": "Make the classifier provider pluggable at runtime through a WASM interface with resource limits.", "label": "code_hard"}
+{"text": "Fix the security issue where a crafted transcript path lets decide read arbitrary files.", "label": "code_hard"}
+{"text": "Design and implement rate-limit-aware routing that downgrades effort when the user is near their 5-hour limit.", "label": "code_hard"}
+{"text": "Implement cross-session learning of per-project effort preferences with privacy guarantees and an opt-out.", "label": "code_hard"}
+{"text": "Profile and cut the end-to-end decision latency from 600 ms to under 100 ms without dropping classification quality.", "label": "code_hard"}

@@ -1,0 +1,34 @@
+{
+  "routing_class": {
+    "type": "choice",
+    "instructions": "Classify the work needed to answer the Current request. A short follow-up such as 'ok do it', 'go', 'continue', 'try again', 'fix it', 'why?', 'explain' or 'same for the other one' asks for the task it refers to in the recent conversation: classify that task with its full size, risk and difficulty, never by the length of the follow-up. Choose code_* when the assistant is expected to change files or run commands, question_* when it is expected to answer.",
+    "criteria": {
+      "question_simple": "A direct question requiring limited reasoning or context.",
+      "question_moderate": "A question requiring multi-step reasoning or synthesis of relevant context.",
+      "question_hard": "A question requiring deep analysis, broad context, or difficult trade-off reasoning.",
+      "code_simple": "A small, localized, low-risk code change or implementation task.",
+      "code_moderate": "A multi-step, multi-file, or non-trivial implementation, debugging, or refactoring task.",
+      "code_hard": "A complex, high-risk, architectural, security, performance, or systemic debugging task."
+    }
+  },
+  "task_type": {
+    "type": "choice",
+    "instructions": "Choose the primary task type.",
+    "criteria": {
+      "code-generation": "Writing or modifying source code.",
+      "debugging": "Investigating or fixing a defect.",
+      "question-answering": "Answering a conceptual or factual question.",
+      "analysis": "Analyzing code, data, or a technical design.",
+      "planning": "Designing or planning an implementation."
+    }
+  },
+  "context": {
+    "type": "score",
+    "instructions": "How much project context is needed to answer this request correctly?",
+    "criteria": [
+      "Little or no project context is needed.",
+      "Some project context is useful.",
+      "Substantial project context is required."
+    ]
+  }
+}
