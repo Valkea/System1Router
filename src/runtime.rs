@@ -68,12 +68,14 @@ pub fn process_event(event: &NormalizedEvent, config: &Config, provider: &dyn De
     }
     // Interactive hosts ask the user themselves; recording a guessed answer
     // here would make every such request look declined in telemetry.
-    if config.consent.mode == ConsentMode::Interactive && event.capabilities.interactive_consent && std::env::var("SYSTEM1ROUTER_CONSENT").is_err() {
+    // A confident classification is applied without asking (`consent.askBelow`).
+    let confident = config.consent.mode == ConsentMode::Interactive && config.consent.ask_below.is_some_and(|threshold| recommendation.confidence.routing_class >= threshold);
+    if !confident && config.consent.mode == ConsentMode::Interactive && event.capabilities.interactive_consent && std::env::var("SYSTEM1ROUTER_CONSENT").is_err() {
         let mut decision = base(DecisionOutcome::Ask, Diagnostic::info("consent_requested", "the host will ask the user to choose"), Some(&classification), recommendation.mode.clone(), "consent-requested");
         decision.recommendation = Some(recommendation);
         return decision;
     }
-    let consent = choose_consent(event, config);
+    let consent = if confident { ConsentOutcome::UseSuggestedModel } else { choose_consent(event, config) };
     let accepted = matches!(consent, ConsentOutcome::UseSuggestedModel);
     let mut decision = base(if accepted && matches!(recommendation.mode, RoutingMode::FullOverride | RoutingMode::Gateway) { DecisionOutcome::Route } else if matches!(consent, ConsentOutcome::Unavailable | ConsentOutcome::TimedOut) && config.consent.mode == ConsentMode::Interactive { DecisionOutcome::Ask } else { DecisionOutcome::Allow }, if accepted { Diagnostic::info("recommendation_accepted", "recommendation accepted for this request") } else { Diagnostic::info("recommendation_declined", "request keeps the captured current model") }, Some(&classification), recommendation.mode.clone(), if accepted { "accepted" } else { "declined" });
     decision.recommendation = Some(recommendation);

@@ -114,9 +114,26 @@ pub struct ConsentConfig {
     pub mode: ConsentMode,
     #[serde(default = "default_true")]
     pub decline_on_timeout: bool,
+    /// The dialog the Claude Code mod shows for an effort swap.
+    #[serde(default)]
+    pub style: ConsentStyle,
+    /// With `interactive`, apply without asking when the class confidence is
+    /// at least this; ask only when the classifier is unsure.
+    #[serde(default)]
+    pub ask_below: Option<f32>,
 }
 
-impl Default for ConsentConfig { fn default() -> Self { Self { mode: ConsentMode::default(), decline_on_timeout: true } } }
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum ConsentStyle {
+    /// Use or keep the suggestion, or remember the answer for the pair.
+    #[default]
+    Confirm,
+    /// Pick the effort: the suggested one first, any other typed under Other.
+    Menu,
+}
+
+impl Default for ConsentConfig { fn default() -> Self { Self { mode: ConsentMode::default(), decline_on_timeout: true, style: ConsentStyle::default(), ask_below: None } } }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -349,6 +366,7 @@ impl Config {
         if self.timeouts.provider_ms == 0 || self.timeouts.hook_ms == 0 { return Err("timeouts must be greater than zero".into()); }
         if !(1..=86_400_000).contains(&self.timeouts.consent_ms) { return Err("timeouts.consentMs must be between 1 and 86400000 milliseconds".into()); }
         if self.redaction.max_query_chars == 0 || self.redaction.max_context_chars == 0 { return Err("redaction limits must be greater than zero".into()); }
+        if self.consent.ask_below.is_some_and(|value| !(0.0..=1.0).contains(&value)) { return Err("consent.askBelow must be between 0 and 1".into()); }
         if !(0.0..=1.0).contains(&self.routing.min_confidence) { return Err("routing.minConfidence must be between 0 and 1".into()); }
         if let Some(template) = &self.providers.jev.state_template {
             if !template.contains("{query}") || template.len() > 8_000 { return Err("providers.jev.stateTemplate must contain {query} and be at most 8000 bytes".into()); }

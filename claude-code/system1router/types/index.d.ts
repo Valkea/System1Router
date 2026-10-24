@@ -14,8 +14,8 @@ export type Routed = {
   from: Effort | null
   /** The turn ran on the suggested model, or kept the current one. */
   outcome: 'switched' | 'kept'
-  /** The dialog, a remembered answer, the router's consent mode, or a dismissed dialog. */
-  how: 'asked' | 'remembered' | 'auto' | 'dismissed'
+  /** The dialog, a remembered answer, the router's consent mode, a dismissed dialog, or another effort picked in the menu. */
+  how: 'asked' | 'remembered' | 'auto' | 'dismissed' | 'picked'
 }
 
 /** The effort the router holds for the main loop of this session. */

@@ -22,6 +22,8 @@ const costs = atom({ plugin: 'system1router', key: 'costs' } as const, [])
 
 const EFFORTS: readonly string[] = ['low', 'medium', 'high', 'xhigh', 'max']
 const HISTORY = 30
+/** An aborted prompt resent with a tag within this time corrects its decision. */
+const RESEND_MS = 120_000
 
 /** What `system1router decide` answers (see `claude_code::mod_decision`). */
 type Decision = {
@@ -45,6 +47,22 @@ type Decision = {
   code?: string
   /** The decision's id in `events.jsonl`, so its answer can be joined to it. */
   correlationId?: string
+  /** `consent.style`: `menu` picks among efforts, `confirm` says yes or no. */
+  style?: 'confirm' | 'menu'
+}
+
+/** A `[high]` tag opening a prompt: that effort for this turn, the tag removed. */
+export function effortTag(text: string): { effort: Effort; text: string } | undefined {
+  const match = /^\s*\[(low|medium|high|xhigh|max)\]\s*/i.exec(text)
+  const effort = asEffort(match?.[1]?.toLowerCase())
+  return match && effort && text.length > match[0].length ? { effort, text: text.slice(match[0].length) } : undefined
+}
+
+/** Up to four efforts for the menu: the suggested one, the current one, then the nearest. */
+export function menuEfforts(suggested: Effort, current: Effort | null): Effort[] {
+  const rank = (effort: string) => EFFORTS.indexOf(effort)
+  const nearest = [...EFFORTS].sort((a, b) => Math.abs(rank(a) - rank(suggested)) - Math.abs(rank(b) - rank(suggested)) || rank(b) - rank(a)) as Effort[]
+  return [...new Set([suggested, ...(current ? [current] : []), ...nearest])].slice(0, 4)
 }
 
 type Choice = { model: string; ids: string[]; current: string; effort: Effort | null }
@@ -182,12 +200,28 @@ async function settle($: EngineInterface, decision: Decision): Promise<Choice | 
   let accept = decision.action === 'switch'
   let remember = false
   let how: Routed['how'] = decision.remembered == null ? 'auto' : 'remembered'
+  let picked: Effort | null = null
   if (decision.action === 'ask') {
     // Nobody to ask (a -p run): keep the current model and record nothing.
     if ((await $.session.surfaces()).length === 0) {
       $.ui.status(idle(decision))
       return undefined
     }
+    if (isEffort && effort && decision.style === 'menu') {
+      // Any effort can be picked: the suggested one first, another typed under Other.
+      const efforts = menuEfforts(effort, from)
+      const labels = efforts.map(level => (level === effort ? `${level} (suggested)` : level === from ? `${level} (current)` : level))
+      const percent = Math.round((decision.confidence ?? 0) * 100)
+      const reason = (decision.reason ?? '').replace(/\.\s*$/, '')
+      try {
+        const answer = await $.ui.ask(`S1R · ${decision.routingClass} (${percent}%)${reason ? `: ${reason}` : ''}. Which effort for this turn?`, { header: 'S1R effort', options: labels })
+        picked = asEffort(answer.trim().split(/\s+/)[0]?.toLowerCase())
+        how = 'asked'
+      } catch {
+        how = 'dismissed'
+      }
+      accept = picked === effort
+    } else {
     const labels = isEffort
       ? [`Use ${target}`, `Keep ${was} effort`, `Always ${was} → ${effort}`, `Never ${was} → ${effort}`]
       : [`Use ${target}`, `Keep ${short(current)}`, `Always switch to ${model}`, `Never switch to ${model}`]
@@ -205,12 +239,22 @@ async function settle($: EngineInterface, decision: Decision): Promise<Choice | 
       // Escape keeps the current model, as in OpenCode.
       how = 'dismissed'
     }
+    }
   }
+  // Another effort picked in the menu: the suggestion is declined, the pick applied and recorded.
+  const chosen = picked && picked !== effort && picked !== from ? picked : null
   if (decision.record) {
     const variant = decision.variant ? ['--variant', decision.variant] : []
     const before = isEffort && from ? ['--current-variant', from] : []
     const correlation = decision.correlationId ? ['--correlation', decision.correlationId] : []
     await run($, ['choice', '--current', current, ...before, '--suggested', model, ...variant, '--accept', accept ? 'yes' : 'no', ...(remember ? ['--remember'] : []), ...correlation])
+  }
+  if (chosen) {
+    await run($, ['override', '--session', await $.session.id(), '--model', current, '--effort', chosen, ...(effort ? ['--from', effort] : []), ...(decision.correlationId ? ['--correlation', decision.correlationId] : [])])
+    await update($, routed, list => [...list, { kind: 'effort' as const, routingClass: decision.routingClass ?? 'unknown', confidence: decision.confidence ?? 0, current, model, effort: chosen, from, outcome: 'switched' as const, how: 'picked' as const }].slice(-HISTORY))
+    await update($, effortState, s => ({ ...s, applied: chosen }))
+    $.ui.status(`S1R · ${decision.routingClass} → ${chosen} effort (your pick, not ${effort})`)
+    return undefined
   }
   const entry: Routed = { kind: isEffort ? 'effort' : 'model', routingClass: decision.routingClass ?? 'unknown', confidence: decision.confidence ?? 0, current, model, effort, from, outcome: accept ? 'switched' : 'kept', how }
   await update($, routed, list => [...list, entry].slice(-HISTORY))
@@ -242,6 +286,11 @@ export const register: Register = (on, options) => {
   // ended: past the prompt cache's lifetime a change loses nothing.
   const sent = new Map<string, Effort | null>()
   let lastEnd: number | undefined
+  // A `[high]` tag's effort, for the turn the prompt starts, then per turn.
+  let tagged: Effort | undefined
+  const forced = new Map<string, Effort>()
+  // The last routed prompt: resent with a tag after Esc, it corrects that decision.
+  let last: { text: string; correlationId?: string; effort: string | null; at: number; turnId?: string; aborted: boolean } | undefined
 
   on('session.start', async ($, e, next) => {
     // The command hook of this session, if installed too, leaves routing to the mod.
@@ -265,8 +314,32 @@ export const register: Register = (on, options) => {
 
   on('prompt.submit', async ($, e, next) => {
     pending = undefined
+    tagged = undefined
     if (!typed(e.origin) || e.turnId !== undefined || !e.text.trim() || e.text.trimStart().startsWith('/')) return next(e)
     const [data, held] = await Promise.all([read($, panel), read($, effortState)])
+    const tag = effortTag(e.text)
+    if (tag) {
+      tagged = tag.effort
+      $.ui.status(`S1R · ${tag.effort} effort (your tag)`)
+      try {
+        const [session_id, cwd, model, now] = await Promise.all([$.session.id(), $.session.cwd(), $.session.model(), $.clock.now()])
+        const resent = last && last.aborted && last.text === tag.text.trim() && now - last.at < RESEND_MS ? last : undefined
+        // What the router would have chosen, to record the tag as a correction of it.
+        let from = resent ? { effort: resent.effort, correlationId: resent.correlationId } : undefined
+        if (!from && !(data?.status.swap === 'effort' && held.paused)) {
+          const stdin = JSON.stringify({ session_id, cwd, model, prompt: tag.text, hook_event_name: 'UserPromptSubmit', effort: held.applied ?? held.base ?? undefined })
+          const decision = JSON.parse(await run($, ['decide'], stdin)) as Decision
+          if (decision.routingClass) from = { effort: decision.effort ?? decision.currentEffort ?? null, correlationId: decision.correlationId }
+        }
+        if (from && from.effort !== tag.effort) {
+          await run($, ['override', '--session', session_id, '--model', model, '--effort', tag.effort, ...(from.effort ? ['--from', from.effort] : []), ...(from.correlationId ? ['--correlation', from.correlationId] : [])])
+        }
+        last = { text: tag.text.trim(), correlationId: from?.correlationId, effort: tag.effort, at: now, aborted: false }
+      } catch (error) {
+        await update($, problem, () => String(error))
+      }
+      return next({ ...e, text: tag.text })
+    }
     if (data?.status.swap === 'effort' && held.paused) {
       $.ui.status('S1R · automatic effort paused')
       return next(e)
@@ -277,7 +350,9 @@ export const register: Register = (on, options) => {
       const effort = held.applied ?? held.base ?? undefined
       const idle_ms = lastEnd === undefined ? undefined : Math.max(0, now - lastEnd)
       const stdin = JSON.stringify({ session_id, cwd, model, prompt: e.text, hook_event_name: 'UserPromptSubmit', effort, idle_ms })
-      pending = await settle($, JSON.parse(await run($, ['decide'], stdin)) as Decision)
+      const decision = JSON.parse(await run($, ['decide'], stdin)) as Decision
+      pending = await settle($, decision)
+      last = { text: e.text.trim(), correlationId: decision.correlationId, effort: (await read($, effortState)).applied ?? decision.currentEffort ?? null, at: now, aborted: false }
     } catch (error) {
       // Fail open: the prompt goes on with the session's model.
       $.ui.status('S1R unavailable')
@@ -287,15 +362,22 @@ export const register: Register = (on, options) => {
   })
 
   on('turn.start', ($, e, next) => {
-    if (pending) turns.set(e.turnId, pending)
-    pending = undefined
+    // Older engines start only the main loop's turns here, without `agentId`.
+    if ((e as { agentId?: string }).agentId === undefined) {
+      if (pending) turns.set(e.turnId, pending)
+      if (tagged) forced.set(e.turnId, tagged)
+      if (last && last.turnId === undefined) last.turnId = e.turnId
+      pending = undefined
+      tagged = undefined
+    }
     return next(e)
   })
 
   on('turn.step', async function* ($, e, next) {
     // Subagents keep their own model and effort.
     if (e.agentId !== undefined) return yield* next(e)
-    const effort = await steer($, e)
+    // A tag holds for its turn alone; automatic effort stays on.
+    const effort = forced.get(e.turnId) ?? (await steer($, e))
     if (!sent.has(e.turnId)) sent.set(e.turnId, effort ?? asEffort(e.effort))
     const step = effort && effort !== e.effort ? { ...e, effort } : e
     const choice = turns.get(e.turnId)
@@ -333,7 +415,9 @@ export const register: Register = (on, options) => {
 
   on('turn.complete', async ($, e, next) => {
     turns.delete(e.turnId)
+    forced.delete(e.turnId)
     if (e.agentId === undefined) {
+      if (last?.turnId === e.turnId && e.isAborted) last.aborted = true
       lastEnd = await $.clock.now()
       const effort = sent.get(e.turnId) ?? null
       sent.delete(e.turnId)

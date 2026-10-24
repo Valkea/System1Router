@@ -49,9 +49,10 @@ fn main() {
         Some("hook") => command_hook(&args, config),
         Some("decide") => command_decide(config),
         Some("choice") => command_choice(&args, &config),
-        // `override --session S --model M --effort E [--from F]`: a manual /effort over the mod's.
+        // `override --session S --model M --effort E [--from F] [--correlation ID]`: an effort
+        // the person chose over the router's (/effort, the menu, a `[high]` prompt tag).
         Some("override") => match (argument(&args, "--session"), argument(&args, "--model"), argument(&args, "--effort")) {
-            (Some(session), Some(model), Some(effort)) => { system1router_core::telemetry::record_override(&config, "claude-code", session, model, effort, argument(&args, "--from")); print_json(json!({ "recorded": true })); }
+            (Some(session), Some(model), Some(effort)) => { system1router_core::telemetry::record_override(&config, "claude-code", session, model, effort, argument(&args, "--from"), argument(&args, "--correlation")); print_json(json!({ "recorded": true })); }
             _ => print_json(json!({ "recorded": false, "error": "--session, --model and --effort are required" })),
         },
         Some("panel") => print_json(control::panel(&config, config_path.as_deref())),
@@ -447,7 +448,9 @@ fn command_decide(config: Config) {
     let provider = build_provider(&config);
     let decision = process_event_safe(&event, &config, provider.as_ref());
     record_decision(&decision, &event, &config);
-    print_json(claude_code::mod_decision(&decision, &event, system1router_core::prices::load().as_ref(), control::remembered));
+    let mut output = claude_code::mod_decision(&decision, &event, system1router_core::prices::load().as_ref(), control::remembered);
+    output["style"] = json!(config.consent.style);
+    print_json(output);
 }
 
 /// Records the answer the mod got: `choice --current M [--current-variant V]

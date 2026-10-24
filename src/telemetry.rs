@@ -63,11 +63,11 @@ pub fn record_choice(config: &Config, host: &str, model: Option<&str>, suggested
 /// Appends a manual effort change that overrode the router's (`/effort` while
 /// the mod held another effort): the strongest sign the router was wrong.
 /// `usage.jsonl` keeps it beside the answers; stats count it apart.
-pub fn record_override(config: &Config, host: &str, session: &str, model: &str, effort: &str, from: Option<&str>) {
+pub fn record_override(config: &Config, host: &str, session: &str, model: &str, effort: &str, from: Option<&str>, correlation: Option<&str>) {
     if !config.telemetry.enabled || std::env::var("SYSTEM1ROUTER_TELEMETRY_DISABLED").is_ok() { return; }
     let Some(directory) = crate::control::state_directory() else { return; };
     let _ = fs::create_dir_all(&directory);
     let timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|value| value.as_millis() as u64).unwrap_or_default();
-    let line = serde_json::json!({ "kind": "override", "host": host, "sessionId": session, "model": model, "effort": effort, "from": from, "timestampMs": timestamp });
+    let line = serde_json::json!({ "kind": "override", "host": host, "sessionId": session, "model": model, "effort": effort, "from": from, "correlationId": correlation, "timestampMs": timestamp });
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(directory.join("usage.jsonl")) { let _ = writeln!(file, "{line}"); }
 }

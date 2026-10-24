@@ -41,11 +41,13 @@ type Fake = {
   env: string | undefined
   /** Ids of the open panes. */
   panes: string[]
+  /** Prompt texts as the engine received them. */
+  submitted: string[]
 }
 
 /** The engine beneath the mod: the binary, the session, the dialog and the turn. */
 function engine(on: On, decision: object, answer?: string): Fake {
-  const state: Fake = { decision, panel: PANEL, now: 1_000, answer, calls: [], stdin: [], sent: { model: '', effort: undefined }, tried: [], unknown: [], toasts: [], env: undefined, panes: [] }
+  const state: Fake = { decision, panel: PANEL, now: 1_000, answer, calls: [], stdin: [], sent: { model: '', effort: undefined }, tried: [], unknown: [], toasts: [], env: undefined, panes: [], submitted: [] }
   on('process.run', ($, e) => {
     state.calls.push([...e.argv.slice(1)])
     if (e.init?.stdin) state.stdin.push(e.init.stdin)
@@ -82,7 +84,10 @@ function engine(on: On, decision: object, answer?: string): Fake {
     const question = e.questions[0]?.question ?? ''
     return { result: { questions: e.questions, answers: { [question]: state.answer } } }
   })
-  on('prompt.submit', ($, e) => ({ text: e.text }))
+  on('prompt.submit', ($, e) => {
+    state.submitted.push(e.text)
+    return { text: e.text }
+  })
   on('turn.start', ($, e) => ({ turnId: e.turnId }))
   on('turn.step', async function* ($, e) {
     state.tried.push(e.model)
@@ -103,8 +108,8 @@ async function turn($: Engine, state: Fake, text = 'refactor the parser', turnId
 }
 
 /** Ends a main-loop turn with what its requests cost. */
-async function complete($: Engine, turnId: string, cacheRead: number, cacheWrite: number): Promise<void> {
-  await $.turn.complete({ turnId, answer: 'ok', durationMs: 1, isAborted: false, reason: 'answer', usage: { model: 'claude-sonnet-5-5', input_tokens: 0, output_tokens: 10, cache_read_input_tokens: cacheRead, cache_creation_input_tokens: cacheWrite } })
+async function complete($: Engine, turnId: string, cacheRead: number, cacheWrite: number, isAborted = false): Promise<void> {
+  await $.turn.complete({ turnId, answer: 'ok', durationMs: 1, isAborted, reason: isAborted ? 'aborted' : 'answer', usage: { model: 'claude-sonnet-5-5', input_tokens: 0, output_tokens: 10, cache_read_input_tokens: cacheRead, cache_creation_input_tokens: cacheWrite } })
 }
 
 test('an accepted suggestion sends the turn to that model and effort', async ($, on) => {
@@ -282,4 +287,41 @@ test('the dashboard shows the effort, what a change did to the cache, and resume
   await turn($, state, 'paused', 'turn-5')
   expect(state.calls.filter(call => call[0] === 'decide')).toHaveLength(decided)
   await ui.unmount()
+})
+
+const MENU = { ...EFFORT, currentEffort: 'medium', style: 'menu', correlationId: 's1r-7' }
+
+test('the menu applies the suggested effort, another picked one, or one typed under Other', async ($, on) => {
+  const state = engine(on, MENU, 'xhigh (suggested)')
+  expect((await turn($, state, 'fix the race', 'turn-1')).effort).toBe('xhigh')
+
+  state.answer = 'high'
+  expect((await turn($, state, 'fix the race', 'turn-2')).effort).toBe('high')
+  expect(state.calls).toContainEqual(['override', '--session', 'session-1', '--model', 'claude-sonnet-5-5', '--effort', 'high', '--from', 'xhigh', '--correlation', 's1r-7'])
+  expect(state.calls.filter(call => call[0] === 'choice').at(-1)).toContain('no')
+
+  state.answer = 'max'
+  expect((await turn($, state, 'fix the race', 'turn-3')).effort).toBe('max')
+  state.answer = 'medium (current)'
+  expect((await turn($, state, 'fix the race', 'turn-4')).effort).toBe('max')
+})
+
+test('a [high] tag sets that effort for its turn only and records it against the router', async ($, on) => {
+  const state = engine(on, { ...UNCHANGED, currentEffort: 'medium', effort: undefined, correlationId: 's1r-9' })
+  expect((await turn($, state, '[xhigh] fix it', 'turn-1')).effort).toBe('xhigh')
+  expect(state.submitted.at(-1)).toBe('fix it')
+  expect(JSON.parse(state.stdin.at(-1) ?? '{}').prompt).toBe('fix it')
+  expect(state.calls).toContainEqual(['override', '--session', 'session-1', '--model', 'claude-sonnet-5-5', '--effort', 'xhigh', '--from', 'medium', '--correlation', 's1r-9'])
+  await complete($, 'turn-1', 0, 100)
+  expect((await turn($, state, 'thanks', 'turn-2')).effort).toBe('medium')
+})
+
+test('resending an aborted prompt with a tag corrects its decision without classifying again', async ($, on) => {
+  const state = engine(on, { ...EFFORT, action: 'switch', variant: 'low', effort: 'low', correlationId: 's1r-3' })
+  expect((await turn($, state, 'make the cache safe across processes', 'turn-1')).effort).toBe('low')
+  await complete($, 'turn-1', 0, 100, true)
+  const decided = state.calls.filter(call => call[0] === 'decide').length
+  expect((await turn($, state, '[xhigh] make the cache safe across processes', 'turn-2')).effort).toBe('xhigh')
+  expect(state.calls.filter(call => call[0] === 'decide')).toHaveLength(decided)
+  expect(state.calls).toContainEqual(['override', '--session', 'session-1', '--model', 'claude-sonnet-5-5', '--effort', 'xhigh', '--from', 'low', '--correlation', 's1r-3'])
 })

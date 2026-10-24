@@ -167,3 +167,21 @@ fn a_trial_logs_what_jev_saw_and_the_overrides_and_the_hook_stays_out() {
     assert_eq!(cli(&["hook", "--host", "claude-code", "--config", config], &payload, None).trim(), "{}");
     assert_eq!(events().lines().count(), before);
 }
+
+#[test]
+fn ask_below_applies_confident_efforts_and_the_style_reaches_the_mod() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = directory.path().join("config.json");
+    std::fs::write(&config, r#"{"routing":{"enabled":true,"swap":"effort","classSelection":"argmax"},"consent":{"mode":"interactive","style":"menu","askBelow":0.8},"providers":{"selected":"jev","jev":{"baseUrl":"http://127.0.0.1:9","credentialEnv":null}}}"#).unwrap();
+    let config = config.to_str().unwrap();
+    let payload = r#"{"session_id":"s","cwd":"/tmp","prompt":"rename tmp","model":"claude-opus-5-5","effort":"high","hook_event_name":"UserPromptSubmit"}"#;
+    let jev = |confidence: f64| serde_json::json!({ "answers": {
+        "routing_class": { "choice": "code_simple", "confidence": confidence },
+        "task_type": { "choice": "code-generation", "confidence": 0.9 },
+        "context": { "score": 0.0, "confidence": 0.9 } } }).to_string();
+    let sure = run_with(&["decide", "--config", config], payload, directory.path(), Some("s"), Some(&jev(0.9)));
+    assert_eq!((sure["action"].as_str(), sure["effort"].as_str(), sure["style"].as_str()), (Some("switch"), Some("medium"), Some("menu")), "{sure}");
+    let unsure = run_with(&["decide", "--config", config], payload, directory.path(), Some("s"), Some(&jev(0.6)));
+    assert_eq!(unsure["action"], "ask", "{unsure}");
+    assert!(unsure["correlationId"].as_str().is_some_and(|id| id.starts_with("s1r-")));
+}
