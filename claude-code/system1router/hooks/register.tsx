@@ -149,6 +149,26 @@ export function consentLabel(status: Panel['status']): string {
   return `${status.consentStyle ?? 'confirm'}${status.askBelow != null ? ` below ${Math.round(status.askBelow * 100)}%` : ''}`
 }
 
+const CONSENT_CHOICES = [
+  ['Auto: apply the effort, never ask', 'auto'],
+  ['Confirm: yes or no on each suggestion', 'confirm ask-below off'],
+  ['Menu: pick the effort each time', 'menu ask-below off'],
+  ['Menu, only when the router is unsure (< 80%)', 'menu ask-below 80%'],
+] as const
+
+/** `/s1router_consent` alone: the choice in a native dialog. */
+async function pickConsent($: EngineInterface): Promise<string> {
+  const data = await refresh($)
+  if ((await $.session.surfaces()).length === 0) return run($, ['consent'])
+  try {
+    const answer = await $.ui.ask(`How should System1Router confirm an effort change?${data ? ` Now: ${consentLabel(data.status)}.` : ''}`, { header: 'S1R consent', options: CONSENT_CHOICES.map(([label]) => label) })
+    const choice = CONSENT_CHOICES.find(([label]) => label === answer)
+    return choice ? consent($, choice[1]) : consent($, answer)
+  } catch {
+    return run($, ['consent'])
+  }
+}
+
 /** `/s1router_consent [auto|confirm|menu] [ask-below 80%|off]`, through `system1router consent`. */
 async function consent($: EngineInterface, args: string): Promise<string> {
   const words = args.trim().split(/\s+/).filter(Boolean)
@@ -467,7 +487,7 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 's1router_stats' }, async $ => ({ text: await run($, ['stats']) }))
 
-  on('command.run', { command: 's1router_consent' }, async ($, e) => ({ text: await consent($, e.args) }))
+  on('command.run', { command: 's1router_consent' }, async ($, e) => ({ text: e.args.trim() ? await consent($, e.args) : await pickConsent($) }))
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)

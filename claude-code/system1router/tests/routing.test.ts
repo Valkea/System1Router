@@ -341,3 +341,12 @@ test('/s1router_consent sets the dialog and the pane cycles it', async ($, on) =
   expect(state.calls).toContainEqual(['consent', 'auto'])
   await ui.unmount()
 })
+
+test('/s1router_consent alone opens a dialog to choose', async ($, on) => {
+  const state = engine(on, ASK, 'Menu, only when the router is unsure (< 80%)')
+  await $.command.run({ command: 's1router_consent', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } })
+  expect(state.calls).toContainEqual(['consent', 'menu', '--ask-below', '80%'])
+  state.answer = undefined
+  await $.command.run({ command: 's1router_consent', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } })
+  expect(state.calls.at(-1)).toEqual(['consent'])
+})
