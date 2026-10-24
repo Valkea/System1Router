@@ -96,6 +96,7 @@ fn available_effort(wanted: &str, current: &ModelState, catalog: &ModelCatalog) 
 
 /// True when some class would set an effort other than the current one.
 pub fn effort_possible(event: &NormalizedEvent, config: &Config) -> bool {
+    if !config.effort.hosts.is_empty() && !config.effort.hosts.contains(&event.host) { return false; }
     let Some(current) = &event.current_model else { return false; };
     current.variant.as_ref().is_none_or(|variant| RoutingClass::ALL.iter().any(|class| config.effort.level(class) != *variant))
 }
@@ -269,6 +270,8 @@ mod tests {
         for class in RoutingClass::ALL { config.effort.levels.insert(class.as_str().into(), "high".into()); }
         assert!(!effort_possible(&effort_event(Some("high"), &[]), &config));
         assert!(effort_possible(&effort_event(Some("low"), &[]), &config));
+        config.effort.hosts = vec!["claude-code".into()];
+        assert!(!effort_possible(&effort_event(None, &[]), &config), "the fixture's host is not listed");
     }
     #[test] fn effort_cache_guard_holds_lower_efforts_while_the_cache_is_warm() {
         let (config, _, _) = fixture();

@@ -171,12 +171,16 @@ pub struct EffortConfig {
     /// much idle time nothing cached is lost and any effort applies.
     #[serde(default = "default_cache_ttl")]
     pub cache_ttl_ms: u64,
+    /// Hosts the effort swap applies to (`claude-code`, `opencode`, ...);
+    /// empty for all. Requests from other hosts are not classified.
+    #[serde(default)]
+    pub hosts: Vec<String>,
 }
 
 fn default_effort_cache_guard() -> u64 { 50_000 }
 fn default_cache_ttl() -> u64 { 300_000 }
 
-impl Default for EffortConfig { fn default() -> Self { Self { levels: Default::default(), cache_guard_tokens: default_effort_cache_guard(), cache_ttl_ms: default_cache_ttl() } } }
+impl Default for EffortConfig { fn default() -> Self { Self { levels: Default::default(), cache_guard_tokens: default_effort_cache_guard(), cache_ttl_ms: default_cache_ttl(), hosts: Vec::new() } } }
 
 impl EffortConfig {
     pub fn level(&self, class: &RoutingClass) -> String {
