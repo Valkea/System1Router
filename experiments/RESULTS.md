@@ -106,3 +106,50 @@ Run on 2026-10-24 against `jev-1.14.0` (what `jev-latest` resolves to today).
 - Fine-tuned encoders: these heads were frozen.
 - Ettin and mmBERT: they have no embedding-tuned ONNX export.
 - `granite-embedding-small-english-r2`: no ONNX export on the Hub.
+
+## 3. A classifier trained on past sessions
+
+**Question.** Can past sessions train a local classifier that picks the effort better than Jev?
+
+**Data.**
+- `experiments/dataset_extract.py` took every prompt the person typed in Claude Code (948) and OpenCode (1,587), 2,535 in total across 21 projects. Each one comes with its context and with what the turn then took: tool calls, files edited, tokens, time, interruption, and the next prompt.
+- Opus 5.5 judges labelled the effort each prompt needed, in hindsight from that outcome, following `experiments/judge_rubric.md`. Shards 00–13 ran at effort xhigh and 14–25 at effort high; the two batches gave the same label distribution.
+- Label mix: low 31%, medium 35%, high 26%, xhigh 9%, max under 0.1%. The person ran at `xhigh` or `max` about half the time.
+- The dataset stays in `$XDG_STATE_HOME/system1router/dataset` (mode 0600), never in the repository.
+
+**Method.**
+- `experiments/train_classifier.py` fine-tunes `jhu-clsp/mmBERT-small` on CPU, with frozen token embeddings, 4 epochs, batch 8, 256 tokens. The input is the request, then the newest context.
+- A fifth of the sessions are held out: 509 prompts from 96 sessions the model never sees in training.
+- `experiments/jev_on_dataset.py` asks Jev (`jev-1.14.0`) for the same 509 prompts with their context, with the person's consent.
+
+**Results on the 509 held-out prompts:**
+
+| Classifier | exact | ±1 | under | over | MAE | latency |
+|---|---:|---:|---:|---:|---:|---|
+| the effort the turn ran at | 23% | 65% | 12% | 65% | 1.28 | — |
+| always `medium` | 33% | 91% | 35% | 32% | 0.76 | — |
+| Jev, argmax → `effort.levels` | 44% | 95% | 22% | 34% | 0.60 | 183 ms median (network) |
+| Jev, upper 20% → `effort.levels` | 45% | 90% | 10% | 45% | 0.66 | same |
+| ceiling of `effort.levels` (the judge's own class, mapped) | 59% | 100% | 3% | 39% | 0.41 | — |
+| **mmBERT-small fine-tuned, argmax** | **59%** | **95%** | 23% | **18%** | **0.47** | 172 ms (4 threads), 405 ms (1); load 370 ms; 565 MB |
+| mmBERT-small fine-tuned, upper 20% | 56% | 94% | 15% | 29% | 0.51 | same |
+| same, trained on 1,400 labels (different test split) | 55% | 92% | 29% | 15% | 0.53 | |
+
+**Findings.**
+
+1. **The person's default effort overspends.** It was above what the turn needed 65% of the time.
+2. **The fine-tuned model beats Jev on every measure but one.**
+   - Against Jev's argmax: +15 points exact, 0.47 against 0.60 MAE, and about half the over-efforts.
+   - With upper-20% selection it keeps under-effort at 15% (Jev: 10%) while over-spending far less (29% against 45%).
+   - Going from 1,400 to 2,535 labels improved it (55% → 59%, under 29% → 23%), so more labels should still help.
+3. **The class → effort table is itself a ceiling.** Even with the judge's own class, `effort.levels` reaches only 59% exact. Predicting the effort directly is the better target, whatever the classifier.
+4. **Bias to keep in mind.** The model learned the same judge it is scored against, while Jev was not trained on that judge. The gap is real, but partly a matter of agreeing with this judge.
+5. **Latency is no better than Jev's yet.**
+   - The model runs in 172 ms on 4 threads, plus 370 ms to load, so it needs a long-lived worker.
+   - It is 565 MB, mostly the 256k-token embedding table.
+   - Next to try: INT8 quantization, a vocabulary trimmed to the tokens seen, or a smaller encoder (Ettin-32M) fine-tuned the same way.
+
+**Not measured.**
+- Agreement between judges.
+- A human-labelled test set.
+- The model inside the router.
