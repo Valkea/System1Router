@@ -126,9 +126,11 @@ def main() -> None:
     parser.add_argument("--lr", type=float, default=5e-5)
     parser.add_argument("--max-length", type=int, default=384)
     parser.add_argument("--dataset", type=Path, default=STATE / "dataset")
+    parser.add_argument("--threads", type=int, default=4)
+    parser.add_argument("--train-embeddings", action="store_true", help="also train the token embeddings (mmBERT's are 256k x 384: memory heavy)")
     args = parser.parse_args()
     torch.manual_seed(0)
-    torch.set_num_threads(os.cpu_count() or 4)
+    torch.set_num_threads(args.threads)
 
     items = load(args.dataset)
     train, test = split(items)
@@ -138,6 +140,9 @@ def main() -> None:
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     model = AutoModelForSequenceClassification.from_pretrained(args.model, num_labels=len(EFFORTS))
     pad = tokenizer.pad_token_id
+    if not args.train_embeddings:
+        # Frozen embeddings: no optimizer state for the large vocabulary table.
+        model.get_input_embeddings().weight.requires_grad_(False)
     x_train = [encode(tokenizer, item, args.max_length) for item in train]
     y_train = [EFFORTS.index(item["label"]["effort"]) for item in train]
     x_test = [encode(tokenizer, item, args.max_length) for item in test]
@@ -146,7 +151,7 @@ def main() -> None:
     weights = torch.tensor([1 / math.sqrt(counts.get(i, 1)) for i in range(len(EFFORTS))], dtype=torch.float)
     weights = weights / weights.mean()
     loss_fn = torch.nn.CrossEntropyLoss(weight=weights)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
+    optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=args.lr, weight_decay=0.01)
     steps = args.epochs * math.ceil(len(x_train) / args.batch)
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: min(1.0, step / max(1, steps // 10)) * max(0.0, (steps - step) / max(1, steps - steps // 10)))
 
