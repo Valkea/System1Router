@@ -155,3 +155,27 @@ Run on 2026-10-24 against `jev-1.14.0` (what `jev-latest` resolves to today).
 - Agreement between judges.
 - A human-labelled test set.
 - The model inside the router.
+
+## 4. Smaller, faster, and combined with Jev
+
+Same 509 held-out prompts (96 sessions). `combine.py` scores combinations; "cost" runs add an expected-cost term to the loss that charges a too-low effort twice as much as a too-high one (`--cost-weight 1 --under-cost 2`). Latency is ONNX Runtime on CPU, median per prompt.
+
+| Approach | Exact | ±1 | Under | Over | MAE | Size, latency (4 threads / 1), load |
+|---|---:|---:|---:|---:|---:|---|
+| Jev, `code_simple` at `low` | 54% | 93% | 33% | 13% | 0.54 | network |
+| mmBERT-small (section 3) | 59% | 95% | 23% | 18% | 0.47 | 565 MB, 172 / 405 ms, 370 ms |
+| mmBERT-small, cost | 60% | 95% | 22% | 17% | 0.46 | 565 MB, 160 / 392 ms, 330 ms |
+| **Ettin-32M, cost** (embeddings trained, lr 8e-5) | **60%** | 94% | 25% | 15% | 0.47 | **129 MB, 55 / 128 ms, 120 ms** |
+| Ettin-32M + Jev, 50/50 expected level | 64% | 98% | 23% | 13% | 0.39 | |
+| Ettin-32M or Jev, the higher | 60% | 96% | 15% | 25% | 0.45 | |
+| mmBERT-small + Jev, 50/50 expected level | 64% | 99% | 22% | 14% | 0.38 | |
+| mmBERT-small, cost + Jev, stacked (CV by session) | 66% | 96% | 20% | 14% | 0.39 | |
+
+**Findings.**
+
+1. **Ettin-32M matches mmBERT-small at a quarter of the size and latency.** 60% exact, 129 MB, 55 ms on 4 threads and a 120 ms load: cheap enough to run on every prompt.
+2. **The under-effort penalty barely moves under-effort** (mmBERT 23% → 22%). The labels are likely too noisy for the loss to separate the two directions. Taking the higher of the model and Jev does it instead: under-effort falls to 12–15%, for about 10 more points of over-effort.
+3. **The model and Jev disagree usefully.** Averaging their expected effort levels lifts either model from about 60% to 64% exact, and the cases off by two or more levels almost vanish (±1 at 98–99%). A learned combination is no better within noise (63–66%).
+4. **INT8 dynamic quantization breaks the model.** With the stored shapes dropped so the quantizer can run, mmBERT-small predicts `high` for nearly everything (9% exact). Ettin-32M makes it unnecessary.
+
+**Recommendation for the router.** Ettin-32M alone as the local classifier, or averaged with Jev where a Jev key is set. Use "the higher of the two" when under-effort costs more than tokens.
