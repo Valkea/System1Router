@@ -11,12 +11,14 @@ pub struct ProviderConfig {
     pub jev: JevConfig,
     #[serde(default)]
     pub laya: LayaConfig,
+    #[serde(default)]
+    pub local: LocalConfig,
 }
 
 fn default_provider() -> String { "none".into() }
 
 impl Default for ProviderConfig {
-    fn default() -> Self { Self { selected: default_provider(), jev: JevConfig::default(), laya: LayaConfig::default() } }
+    fn default() -> Self { Self { selected: default_provider(), jev: JevConfig::default(), laya: LayaConfig::default(), local: LocalConfig::default() } }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,6 +60,34 @@ pub struct LayaConfig {
     pub model: Option<String>,
     #[serde(default)]
     pub startup_timeout_ms: Option<u64>,
+}
+
+/// The local effort model (`selected: "local"`): one shared process runs it
+/// for every session (src/local_model.rs).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalConfig {
+    /// Its files live in `$XDG_DATA_HOME/system1router/models/<model>/`.
+    #[serde(default = "default_local_model")]
+    pub model: String,
+    /// Folder holding `<model>.json`, `<model>.onnx` and `<model>.tokenizer.json`:
+    /// a GitHub release's download URL, or a local folder.
+    #[serde(default = "default_local_url")]
+    pub url: Option<String>,
+    /// ONNX Runtime threads (default 2).
+    #[serde(default)]
+    pub threads: Option<usize>,
+    /// The model process exits after this long without a request (default 30),
+    /// and as soon as no assistant that used it is still running.
+    #[serde(default)]
+    pub idle_minutes: Option<u64>,
+}
+
+fn default_local_model() -> String { "ettin-32m-effort-v1".into() }
+fn default_local_url() -> Option<String> { None }
+
+impl Default for LocalConfig {
+    fn default() -> Self { Self { model: default_local_model(), url: default_local_url(), threads: None, idle_minutes: None } }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -403,6 +433,7 @@ impl Config {
             "provider": self.providers.selected,
             "jevConfigured": (self.providers.jev.endpoint.is_some() || self.providers.jev.base_url.is_some() || env::var("JEV_BASE_URL").is_ok()) && self.providers.jev.credential_env.as_ref().and_then(|k| env::var(k).ok()).is_some_and(|value| !value.trim().is_empty()),
             "layaConfigured": self.providers.laya.command.is_some() || self.providers.laya.endpoint.is_some() || self.providers.laya.base_url.is_some() || env::var("LAYA_BASE_URL").is_ok(),
+            "localInstalled": crate::local_model::installed(&self.providers.local),
             "swap": self.routing.swap,
             "rules": self.rules.len(),
             "gatewayEnabled": self.gateway.enabled,

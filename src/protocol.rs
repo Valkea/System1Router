@@ -275,7 +275,8 @@ pub struct RoutingClassification {
     #[serde(default)]
     pub context_signals: Vec<String>,
     /// Optional provider distribution over the six classes. When present, the
-    /// router derives the class from it instead of trusting the argmax.
+    /// router derives the class from it instead of trusting the argmax. The
+    /// local model gives its distribution over efforts instead (telemetry only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub class_probabilities: Option<std::collections::BTreeMap<String, f32>>,
     pub confidence: ClassificationConfidence,

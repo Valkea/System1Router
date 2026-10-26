@@ -370,8 +370,8 @@ pub fn doctor(config: &Config) -> Value {
     let summary = config.safe_summary();
     let mut problems: Vec<String> = Vec::new();
     if !config.routing.enabled { problems.push("routing is disabled: set routing.enabled to true (or use /s1router_toggle in OpenCode)".into()); }
-    let provider_ready = match config.providers.selected.as_str() { "jev" => summary["jevConfigured"] == true, "laya" => summary["layaConfigured"] == true, _ => false };
-    if !provider_ready { problems.push(format!("decision provider `{}` is not usable: select jev or laya and set its endpoint/credential (see README)", config.providers.selected)); }
+    let provider_ready = match config.providers.selected.as_str() { "jev" => summary["jevConfigured"] == true, "laya" => summary["layaConfigured"] == true, "local" => summary["localInstalled"] == true, _ => false };
+    if !provider_ready { problems.push(format!("decision provider `{}` is not usable: select jev or laya and set its endpoint/credential, or `system1router provider local` (see README)", config.providers.selected)); }
     // The effort swap uses effort.levels, not rules.
     let swaps_models = config.routing.swap == crate::config::Swap::Model;
     if swaps_models && config.rules.is_empty() { problems.push("no routing rules: add one rule per routing class you want to route".into()); }

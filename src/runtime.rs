@@ -31,7 +31,8 @@ pub fn process_event(event: &NormalizedEvent, config: &Config, provider: &dyn De
     }
     let mut classified_event = event.clone();
     classified_event.correlation_id = Some(id.clone());
-    let classification = match classify_event(provider, &classified_event, config) {
+    let classified = if config.providers.selected == "local" { crate::local_model::classify(&classified_event, config) } else { classify_event(provider, &classified_event, config) };
+    let classification = match classified {
         Ok(value) => value,
         Err(error) => return classification_failure(base, error, config.routing.fail_open),
     };

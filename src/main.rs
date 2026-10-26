@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{cmp::Ordering, env, io::{self, IsTerminal, Read, Write}, path::{Path, PathBuf}, process::Command, sync::mpsc, thread, time::Duration};
-use system1router_core::{adapters::{self, Host, OpenCodeScope}, claude_code, control, classification::build_provider, config::Config, gateway::GatewayServer, protocol::{CapabilityLevel, DecisionOutcome, Diagnostic, NormalizedDecision, PROTOCOL_VERSION, EXIT_INTERNAL_ERROR, EXIT_MALFORMED_EVENT, EXIT_STARTUP_FAILURE, EXIT_TIMEOUT, EXIT_UNSUPPORTED_VERSION}, runtime::{process_event_safe, record_decision}};
+use system1router_core::{adapters::{self, Host, OpenCodeScope}, claude_code, control, local_model, classification::build_provider, config::Config, gateway::GatewayServer, protocol::{CapabilityLevel, DecisionOutcome, Diagnostic, NormalizedDecision, PROTOCOL_VERSION, EXIT_INTERNAL_ERROR, EXIT_MALFORMED_EVENT, EXIT_STARTUP_FAILURE, EXIT_TIMEOUT, EXIT_UNSUPPORTED_VERSION}, runtime::{process_event_safe, record_decision}};
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -56,6 +56,26 @@ fn main() {
                 Err(error) => println!("System1Router: {error}"),
             }
         }
+        // `provider [jev|local]`: the classifier; `local` installs the model first.
+        Some("provider") => {
+            let Some(path) = config_path.clone().or_else(system1router_core::config::default_config_path) else { println!("System1Router: no config path; set SYSTEM1ROUTER_CONFIG."); return; };
+            match args.get(1).map(String::as_str).filter(|word| !word.starts_with("--")) {
+                None => println!("System1Router classifies with {}.", config.providers.selected),
+                Some(name @ ("jev" | "local")) => {
+                    let local = &config.providers.local;
+                    if name == "local" && !local_model::installed(local) {
+                        println!("Downloading the {} model...", local.model);
+                        if let Err(error) = local_model::install(local, argument(&args, "--from")) { println!("System1Router: {error}"); std::process::exit(EXIT_STARTUP_FAILURE); }
+                    }
+                    match control::set_config(&path, "providers", &[("selected", json!(name))]) {
+                        Ok(()) => println!("System1Router classifies with {}.", if name == "local" { local.model.as_str() } else { "Jev" }),
+                        Err(error) => println!("System1Router: {error}"),
+                    }
+                }
+                Some(other) => println!("System1Router: unknown provider {other}; use jev or local."),
+            }
+        }
+        Some("model") => command_model(&args, &config),
         Some("stats") => println!("{}", run_control(claude_code::Control::Stats, config_path.as_deref(), &config)),
         Some("hook") => command_hook(&args, config),
         Some("decide") => command_decide(config),
@@ -75,6 +95,31 @@ fn main() {
     }
 }
 
+/// `model install|start|status|stop|serve`: the shared local model process.
+fn command_model(args: &[String], config: &Config) {
+    let mut local = config.providers.local.clone();
+    if let Some(model) = argument(args, "--model") { local.model = model.into(); }
+    let deadline = || std::time::Instant::now() + std::time::Duration::from_secs(5);
+    match args.get(1).map(String::as_str) {
+        Some("install") => match local_model::install(&local, argument(args, "--from")) {
+            Ok(dir) => println!("System1Router installed {} in {}.", local.model, dir.display()),
+            Err(error) => { println!("System1Router: {error}"); std::process::exit(EXIT_STARTUP_FAILURE); }
+        },
+        Some("serve") => {
+            if let Some(threads) = argument(args, "--threads").and_then(|value| value.parse().ok()) { local.threads = Some(threads); }
+            if let Some(minutes) = argument(args, "--idle-minutes").and_then(|value| value.parse().ok()) { local.idle_minutes = Some(minutes); }
+            if let Err(error) = local_model::serve(&local) { eprintln!("system1router: {error}"); std::process::exit(EXIT_STARTUP_FAILURE); }
+        }
+        // Loads the model ahead of the first prompt and ties it to the calling assistant.
+        Some("start") if config.providers.selected != "local" => print_json(json!({ "running": false, "error": "the local model is not the selected provider" })),
+        Some("start") if !local_model::installed(&local) => print_json(json!({ "running": false, "error": format!("{} is not installed", local.model) })),
+        Some("start") => print_json(local_model::ask(&json!({ "pid": local_model::host_pid() }), deadline(), Some(&local)).map(|reply| json!({ "running": true, "process": reply })).unwrap_or_else(|error| json!({ "running": false, "error": error }))),
+        Some("stop") => print_json(json!({ "stopped": local_model::ask(&json!({ "stop": true }), deadline(), None).is_ok() })),
+        Some("status") | None => print_json(json!({ "model": local.model, "installed": local_model::installed(&local), "directory": local_model::model_directory(&local), "selected": config.providers.selected == "local", "process": local_model::ask(&json!({}), deadline(), None).ok() })),
+        Some(other) => println!("System1Router: unknown model command {other}; use install, start, status, stop or serve."),
+    }
+}
+
 fn print_help() {
     println!("system1router {}", env!("CARGO_PKG_VERSION"));
     println!("\nUsage: system1router <command> [options]\n");
@@ -88,6 +133,8 @@ fn print_help() {
     println!("  gateway                                               Start the optional routing gateway");
     println!("  toggle [on|off]                                       Turn routing on or off (also /s1router_toggle)");
     println!("  consent [auto|confirm|menu] [--ask-below 0.8|off]     How effort suggestions are confirmed (also /s1router_consent)");
+    println!("  provider [jev|local] [--from DIR|URL]                 Classify with Jev or the local model (downloads it)");
+    println!("  model install|start|status|stop [--from DIR|URL]      Manage the shared local model process");
     println!("  status | stats                                        Show routing status or usage stats");
     println!("  decide | choice | panel | forget [KEY]                Used by the Claude Code mod (JSON)");
     println!("  prices [--refresh]                                    Show rule target prices (LiteLLM table)");

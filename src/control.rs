@@ -168,7 +168,7 @@ pub fn format_stats(stats: &Stats) -> String {
 
 fn provider_ready(config: &Config) -> bool {
     let summary = config.safe_summary();
-    match config.providers.selected.as_str() { "jev" => summary["jevConfigured"] == true, "laya" => summary["layaConfigured"] == true, _ => false }
+    match config.providers.selected.as_str() { "jev" => summary["jevConfigured"] == true, "laya" => summary["layaConfigured"] == true, "local" => summary["localInstalled"] == true, _ => false }
 }
 
 pub fn status_text(config: &Config, path: Option<&Path>) -> String {
