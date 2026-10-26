@@ -202,8 +202,10 @@ impl Default for EffortConfig { fn default() -> Self { Self { levels: Default::d
 impl EffortConfig {
     pub fn level(&self, class: &RoutingClass) -> String {
         self.levels.get(class.as_str()).cloned().unwrap_or_else(|| match class {
-            RoutingClass::QuestionSimple => "low",
-            RoutingClass::QuestionModerate | RoutingClass::CodeSimple => "medium",
+            // A simple code task (commit, run the tests, a rename) needs no more than a
+            // simple question: experiments/RESULTS.md, section 3.
+            RoutingClass::QuestionSimple | RoutingClass::CodeSimple => "low",
+            RoutingClass::QuestionModerate => "medium",
             RoutingClass::QuestionHard | RoutingClass::CodeModerate => "high",
             RoutingClass::CodeHard => "xhigh",
         }.into())

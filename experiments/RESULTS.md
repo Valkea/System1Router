@@ -149,6 +149,8 @@ Run on 2026-10-24 against `jev-1.14.0` (what `jev-latest` resolves to today).
    - It is 565 MB, mostly the 256k-token embedding table.
    - Next to try: INT8 quantization, a vocabulary trimmed to the tokens seen, or a smaller encoder (Ettin-32M) fine-tuned the same way.
 
+6. **`code_simple` belongs at `low`.** Jev sent 110 of the 163 prompts needing `low` to `medium`, because `effort.levels` mapped `code_simple` (commit, run the tests, a rename) to `medium`. Mapping it to `low` lifts Jev from 44% to 54% exact (MAE 0.60 → 0.54) on the same 509 prompts. This is now the default.
+
 **Not measured.**
 - Agreement between judges.
 - A human-labelled test set.

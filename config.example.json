@@ -13,7 +13,7 @@
       "question_simple": "low",
       "question_moderate": "medium",
       "question_hard": "high",
-      "code_simple": "medium",
+      "code_simple": "low",
       "code_moderate": "high",
       "code_hard": "xhigh"
     },

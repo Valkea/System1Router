@@ -49,7 +49,7 @@ Run `system1router doctor` after editing: `problems` lists what prevents routing
   "routing": { "enabled": true, "swap": "effort" },
   "consent": { "mode": "always-accept" },
   "effort": {
-    "levels": { "question_simple": "low", "question_moderate": "medium", "question_hard": "high", "code_simple": "medium", "code_moderate": "high", "code_hard": "xhigh" },
+    "levels": { "question_simple": "low", "question_moderate": "medium", "question_hard": "high", "code_simple": "low", "code_moderate": "high", "code_hard": "xhigh" },
     "cacheGuardTokens": 50000,
     "cacheTtlMs": 300000
   }

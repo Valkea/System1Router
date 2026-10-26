@@ -180,7 +180,7 @@ fn ask_below_applies_confident_efforts_and_the_style_reaches_the_mod() {
         "task_type": { "choice": "code-generation", "confidence": 0.9 },
         "context": { "score": 0.0, "confidence": 0.9 } } }).to_string();
     let sure = run_with(&["decide", "--config", config], payload, directory.path(), Some("s"), Some(&jev(0.9)));
-    assert_eq!((sure["action"].as_str(), sure["effort"].as_str(), sure["style"].as_str()), (Some("switch"), Some("medium"), Some("menu")), "{sure}");
+    assert_eq!((sure["action"].as_str(), sure["effort"].as_str(), sure["style"].as_str()), (Some("switch"), Some("low"), Some("menu")), "{sure}");
     let unsure = run_with(&["decide", "--config", config], payload, directory.path(), Some("s"), Some(&jev(0.6)));
     assert_eq!(unsure["action"], "ask", "{unsure}");
     assert!(unsure["correlationId"].as_str().is_some_and(|id| id.starts_with("s1r-")));
