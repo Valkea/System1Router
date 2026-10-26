@@ -345,6 +345,9 @@ export const register: Register = (on, options) => {
     await $.command.register({ name: 's1router_consent', description: 'How System1Router confirms an effort: auto, confirm or menu', argumentHint: '[auto|confirm|menu] [ask-below 80%|off]' })
     const data = await refresh($)
     $.ui.status(data ? (data.status.enabled ? 'S1R on' : 'S1R off') : 'S1R unavailable')
+    // Loads the local model, when selected, before the first prompt: one process
+    // serves every session and exits after the last one.
+    void run($, ['model', 'start']).catch(() => undefined)
     return next(e)
   })
 

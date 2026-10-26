@@ -449,6 +449,9 @@ export const System1RouterServer: Plugin = async ({ client, directory }) => {
   };
   const notified = new Set<string>();
   const binary = process.env.SYSTEM1ROUTER_BIN ?? "system1router";
+  // Loads the local model, when selected, before the first prompt: one process
+  // serves every session and exits after the last one.
+  spawn(binary, ["model", "start"], { stdio: "ignore" }).on("error", () => {});
 
   const notify = async (key: string, message: string, variant: "info" | "warning" | "error" = "info") => {
     if (notified.has(key)) return;
