@@ -124,6 +124,24 @@ For reference, on the 509 held-out prompts:
 | Ettin-32M | 60% | 94% | 0.47 |
 | Ettin-32M + Jev | 64% | 98% | 0.39 |
 
+## 5. Package for the router
+
+```bash
+uv run --no-project --with onnx --with "transformers>=4.48" \
+  python -I experiments/package_model.py ~/.local/state/system1router/dataset/models/ettin-32m-cost \
+  ~/.local/state/system1router/dataset/package --name ettin-32m-effort-v1
+```
+
+This writes the three files `providers.local.url` points at: `<name>.onnx` (graph and weights in one file), `<name>.tokenizer.json` and `<name>.json` (efforts, input layout, file sizes and SHA-256). Try them before publishing:
+
+```bash
+system1router provider local --from ~/.local/state/system1router/dataset/package
+```
+
+To publish, attach the three files to a GitHub release and set `providers.local.url` (and the default in `src/config.rs`) to `https://github.com/<owner>/<repo>/releases/download/<tag>`. A new model gets a new name (`-v2`), so installed copies are never overwritten in place.
+
+The router builds the model's input the way `train_classifier.encode` does, from context rendered as `dataset_extract.render` renders it (`src/local_model.rs`). Change one side, change the other.
+
 ## Retraining
 
 When new sessions accumulate:

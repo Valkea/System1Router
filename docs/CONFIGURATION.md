@@ -71,7 +71,18 @@ Whether an effort swap keeps the prompt cache depends on how the host sends it. 
 
 ## Provider Setup
 
-Provider credentials are referenced by environment variable name (`credentialEnv`); secret values are never included in diagnostics. `jev` and `laya` are optional and do not provide implicit fallback to one another.
+Provider credentials are referenced by environment variable name (`credentialEnv`); secret values are never included in diagnostics. `jev`, `laya` and `local` are optional and do not provide implicit fallback to one another.
+
+`local` (the README's "Local model" section) takes `providers.local`:
+
+| Field | Default | Meaning |
+|---|---|---|
+| `model` | `ettin-32m-effort-v1` | The model's name; its files live in `$XDG_DATA_HOME/system1router/models/<model>/`. |
+| `url` | none | Folder holding `<model>.json`, `<model>.onnx` and `<model>.tokenizer.json`: a GitHub release's download URL or a local folder. `system1router provider local` and `system1router model install` download from it. |
+| `threads` | `2` | ONNX Runtime threads of the model process. |
+| `idleMinutes` | `30` | The model process exits after this long without a prompt. It also exits 30 seconds after the last assistant process that used it has ended. |
+
+The model process listens on `$XDG_RUNTIME_DIR/system1router-model.sock` (mode 0600), or `model.sock` in the state directory without `XDG_RUNTIME_DIR`. Outside Linux, assistant processes cannot be watched, so only `idleMinutes` stops it.
 
 Jev accepts `endpoint` for an exact decision endpoint or `baseUrl`/`JEV_BASE_URL` for deployment-provided URL configuration. Set the key separately:
 

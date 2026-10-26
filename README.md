@@ -89,6 +89,26 @@ export LAYA_BASE_URL='http://127.0.0.1:8788/classify'
 
 The worker receives the same bounded decision request as Jev and returns the normalized classification directly or under `classification`. Use `command` for a managed local process, or `baseUrl` for a separately supervised local runtime. A missing or unhealthy Laya runtime produces a fail-open classification-unavailable outcome.
 
+### Local model (Ettin)
+
+`local` runs an effort classifier on this machine: [Ettin-32M](https://huggingface.co/jhu-clsp/ettin-encoder-32m) fine-tuned on judged coding-assistant prompts (`experiments/TRAINING.md`). It needs no key, sends nothing over the network, and predicts the effort directly. On held-out prompts it matched the judge's effort 60% of the time, against 54% for Jev (`experiments/RESULTS.md`, section 4). Switch to it, or back to Jev:
+
+```sh
+system1router provider local    # downloads the model (130 MB) the first time
+system1router provider jev
+```
+
+One background process (`system1router model serve`) holds the model for every Claude Code and OpenCode session. The first prompt, or the start of a session, launches it in about half a second; afterwards a prompt takes about 10 ms. It exits 30 seconds after the last assistant that used it closes, or after `idleMinutes` without a prompt. `system1router model status|start|stop` inspects and controls it. Its errors go to `~/.local/state/system1router/model.log`.
+
+```json
+"providers": {
+  "selected": "local",
+  "local": { "model": "ettin-32m-effort-v1", "url": "https://github.com/<owner>/<repo>/releases/download/<tag>", "threads": 2, "idleMinutes": 30 }
+}
+```
+
+`url` is the folder the three model files are downloaded from (`<model>.json`, `<model>.onnx` and `<model>.tokenizer.json`); `system1router provider local --from <folder or URL>` overrides it once. The files land in `~/.local/share/system1router/models/<model>/`. Unlike Jev, the model predicts an effort, not a class: in an effort swap the router applies it as is (through the class that `effort.levels` maps to it); `routing.classSelection` picks the top effort (`argmax`), the median, or the highest effort holding 20% of the probability (`upper`).
+
 ## Install Host Hooks
 
 Install for the coding assistants found on this machine:
