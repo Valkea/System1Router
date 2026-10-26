@@ -128,6 +128,9 @@ def main() -> None:
     parser.add_argument("--dataset", type=Path, default=STATE / "dataset")
     parser.add_argument("--threads", type=int, default=4)
     parser.add_argument("--train-embeddings", action="store_true", help="also train the token embeddings (mmBERT's are 256k x 384: memory heavy)")
+    parser.add_argument("--cost-weight", type=float, default=0.0, help="weight of the expected ordinal cost added to the loss (0: plain cross-entropy)")
+    parser.add_argument("--under-cost", type=float, default=2.0, help="cost of each level too low, against 1 for each level too high")
+    parser.add_argument("--name", help="folder name of the saved model (default: the model's)")
     args = parser.parse_args()
     torch.manual_seed(0)
     torch.set_num_threads(args.threads)
@@ -150,7 +153,17 @@ def main() -> None:
     # Inverse square-root frequency: rare efforts count more without dominating.
     weights = torch.tensor([1 / math.sqrt(counts.get(i, 1)) for i in range(len(EFFORTS))], dtype=torch.float)
     weights = weights / weights.mean()
-    loss_fn = torch.nn.CrossEntropyLoss(weight=weights)
+    cross_entropy = torch.nn.CrossEntropyLoss(weight=weights)
+    # cost[t][p]: levels too low cost `under_cost` each, too high 1 each.
+    levels = torch.arange(len(EFFORTS), dtype=torch.float)
+    gap = levels[None, :] - levels[:, None]
+    cost = torch.where(gap < 0, -gap * args.under_cost, gap)
+
+    def loss_fn(logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        loss = cross_entropy(logits, target)
+        if args.cost_weight:
+            loss = loss + args.cost_weight * (torch.softmax(logits, dim=-1) * cost[target]).sum(dim=-1).mean()
+        return loss
     optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=args.lr, weight_decay=0.01)
     steps = args.epochs * math.ceil(len(x_train) / args.batch)
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: min(1.0, step / max(1, steps // 10)) * max(0.0, (steps - step) / max(1, steps - steps // 10)))
@@ -183,7 +196,7 @@ def main() -> None:
     matched = [(i, row) for i, row in matched if row]
     majority = collections.Counter(y_train).most_common(1)[0][0]
     report = {
-        "model": args.model, "train": len(train), "test": len(test), "seconds": round(time.time() - started),
+        "model": args.model, "costWeight": args.cost_weight, "underCost": args.under_cost, "train": len(train), "test": len(test), "seconds": round(time.time() - started),
         "majority (" + EFFORTS[majority] + ")": scores(truth, [EFFORTS[majority]] * len(test)),
         "effort the turn ran at": scores(truth, [item["outcome"]["effort"] for item in test]),
         "fine-tuned, argmax": scores(truth, [EFFORTS[int(p.argmax())] for p in probabilities]),
@@ -196,8 +209,11 @@ def main() -> None:
         report["fine-tuned on those prompts, upper 20%"] = scores(subset, [EFFORTS[risk_averse(probabilities[i], 0.2)] for i, _ in matched])
     report["bySource"] = {source: scores([t for t, item in zip(truth, test) if item["source"] == source], [EFFORTS[risk_averse(p, 0.2)] for p, item in zip(probabilities, test) if item["source"] == source]) for source in ("claude-code", "opencode")}
 
-    out = args.dataset / "models" / args.model.split("/")[-1]
+    out = args.dataset / "models" / (args.name or args.model.split("/")[-1])
     out.mkdir(parents=True, exist_ok=True)
+    # Per-item test probabilities, to combine with other classifiers offline.
+    (out / "test-predictions.jsonl").write_text("".join(json.dumps({"id": item["id"], "probabilities": [round(float(x), 5) for x in p]}) + "\n" for item, p in zip(test, probabilities)))
+    os.chmod(out / "test-predictions.jsonl", 0o600)
     model.save_pretrained(out)
     tokenizer.save_pretrained(out)
     sample = torch.tensor([x_test[0]])
