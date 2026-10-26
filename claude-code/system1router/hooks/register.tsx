@@ -42,6 +42,8 @@ type Decision = {
   variant?: string | null
   remembered?: boolean | null
   routingClass?: string
+  /** The classifier's family, from the model that answered: `Jev`, `Ettin`. */
+  classifier?: string
   confidence?: number
   reason?: string
   code?: string
@@ -87,14 +89,19 @@ function asEffort(value: unknown): Effort | null {
   return typeof value === 'string' && EFFORTS.includes(value) ? (value as Effort) : null
 }
 
+/** `S1R/Ettin`: which classifier decided. */
+function source(decision: Decision): string {
+  return decision.classifier ? `S1R/${decision.classifier}` : 'S1R'
+}
+
 function idle(decision: Decision): string {
   if (decision.code === 'disabled') return 'S1R off'
   if (decision.routingClass && (decision.code === 'effort_unchanged' || (decision.code === 'cache_sticky' && decision.effort))) {
     const now = `${decision.currentEffort ?? 'session'} effort`
-    return `S1R · ${decision.routingClass} · ${now}${decision.code === 'cache_sticky' ? ` kept for the cache (not ${decision.effort})` : ''}`
+    return `${source(decision)} · ${decision.routingClass} · ${now}${decision.code === 'cache_sticky' ? ` kept for the cache (not ${decision.effort})` : ''}`
   }
   const current = decision.current ? short(decision.current) : 'current model'
-  if (decision.routingClass) return `S1R · ${decision.routingClass}${decision.code === 'cache_sticky' ? ' · cache kept' : ''} · ${current}`
+  if (decision.routingClass) return `${source(decision)} · ${decision.routingClass}${decision.code === 'cache_sticky' ? ' · cache kept' : ''} · ${current}`
   return 'S1R on'
 }
 
@@ -138,7 +145,7 @@ async function closePane($: EngineInterface): Promise<void> {
 async function toggle($: EngineInterface, force?: 'on' | 'off'): Promise<string> {
   const text = await run($, force ? ['toggle', force] : ['toggle'])
   const data = await refresh($)
-  if (data) $.ui.status(data.status.enabled ? 'S1R on' : 'S1R off')
+  if (data) $.ui.status(data.status.enabled ? `S1R on · ${data.status.classifier ?? data.status.provider}` : 'S1R off')
   return text
 }
 
@@ -255,7 +262,7 @@ async function settle($: EngineInterface, decision: Decision): Promise<Choice | 
       const percent = Math.round((decision.confidence ?? 0) * 100)
       const reason = (decision.reason ?? '').replace(/\.\s*$/, '')
       try {
-        const answer = await $.ui.ask(`S1R · ${decision.routingClass} (${percent}%)${reason ? `: ${reason}` : ''}. Which effort for this turn?`, { header: 'S1R effort', options: labels })
+        const answer = await $.ui.ask(`${source(decision)} · ${decision.routingClass} (${percent}%)${reason ? `: ${reason}` : ''}. Which effort for this turn?`, { header: 'S1R effort', options: labels })
         picked = asEffort(answer.trim().split(/\s+/)[0]?.toLowerCase())
         how = 'asked'
       } catch {
@@ -272,7 +279,7 @@ async function settle($: EngineInterface, decision: Decision): Promise<Choice | 
       ? `Think at ${effort} effort instead of ${from ?? "the session's"}? Same model and prompt cache.`
       : `Use ${target} for this turn instead of ${short(current)}?`
     try {
-      const answer = await $.ui.ask(`S1R · ${decision.routingClass} (${percent}%)${reason ? `: ${reason}` : ''}. ${question}`, { header: 'S1R', options: labels })
+      const answer = await $.ui.ask(`${source(decision)} · ${decision.routingClass} (${percent}%)${reason ? `: ${reason}` : ''}. ${question}`, { header: 'S1R', options: labels })
       accept = answer === labels[0] || answer === labels[2]
       remember = answer === labels[2] || answer === labels[3]
       how = 'asked'
@@ -294,12 +301,12 @@ async function settle($: EngineInterface, decision: Decision): Promise<Choice | 
     await run($, ['override', '--session', await $.session.id(), '--model', current, '--effort', chosen, ...(effort ? ['--from', effort] : []), ...(decision.correlationId ? ['--correlation', decision.correlationId] : [])])
     await update($, routed, list => [...list, { kind: 'effort' as const, routingClass: decision.routingClass ?? 'unknown', confidence: decision.confidence ?? 0, current, model, effort: chosen, from, outcome: 'switched' as const, how: 'picked' as const }].slice(-HISTORY))
     await update($, effortState, s => ({ ...s, applied: chosen }))
-    $.ui.status(`S1R · ${decision.routingClass} → ${chosen} effort (your pick, not ${effort})`)
+    $.ui.status(`${source(decision)} · ${decision.routingClass} → ${chosen} effort (your pick, not ${effort})`)
     return undefined
   }
   const entry: Routed = { kind: isEffort ? 'effort' : 'model', routingClass: decision.routingClass ?? 'unknown', confidence: decision.confidence ?? 0, current, model, effort, from, outcome: accept ? 'switched' : 'kept', how }
   await update($, routed, list => [...list, entry].slice(-HISTORY))
-  $.ui.status(accept ? `S1R · ${entry.routingClass} → ${target}` : `S1R · ${entry.routingClass} · kept ${isEffort ? `${was} effort` : short(current)}`)
+  $.ui.status(accept ? `${source(decision)} · ${entry.routingClass} → ${target}` : `${source(decision)} · ${entry.routingClass} · kept ${isEffort ? `${was} effort` : short(current)}`)
   if (isEffort) {
     // Held for the following turns too, until the router picks another.
     if (accept) await update($, effortState, s => ({ ...s, applied: effort }))
@@ -344,7 +351,7 @@ export const register: Register = (on, options) => {
     if (!known.has('s1router_stats')) await $.command.register({ name: 's1router_stats', description: 'Show System1Router calls per model and suggestion acceptance' })
     await $.command.register({ name: 's1router_consent', description: 'How System1Router confirms an effort: auto, confirm or menu', argumentHint: '[auto|confirm|menu] [ask-below 80%|off]' })
     const data = await refresh($)
-    $.ui.status(data ? (data.status.enabled ? 'S1R on' : 'S1R off') : 'S1R unavailable')
+    $.ui.status(data ? (data.status.enabled ? `S1R on · ${data.status.classifier ?? data.status.provider}` : 'S1R off') : 'S1R unavailable')
     // Loads the local model, when selected, before the first prompt: one process
     // serves every session and exits after the last one.
     void run($, ['model', 'start']).catch(() => undefined)
@@ -546,7 +553,7 @@ export const register: Register = (on, options) => {
         </Box>
         {keys && <Text dimColor>{keys}</Text>}
         <Text dimColor>
-          {status.provider}{status.providerReady ? '' : ' (not configured)'} · {status.rules} rules ({status.claudeCodeRules} for Claude Code) · consent {consentLabel(status)}
+          Classifier {status.classifierLabel ?? status.provider}{status.providerReady ? '' : ' (not configured)'} · {status.rules} rules ({status.claudeCodeRules} for Claude Code) · consent {consentLabel(status)}
         </Text>
         {failure && <Text color="red">{failure}</Text>}
 

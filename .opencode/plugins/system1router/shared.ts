@@ -57,6 +57,30 @@ export function configFilePath(): string {
   return path.join(base, "system1router", "config.json");
 }
 
+/** What classifies prompts, from the active config: `jev`, or `local` with the model's family (`Ettin`). */
+export async function classifier(): Promise<{ selected: string; label: string }> {
+  try {
+    const filename = configFilePath();
+    const contents = await fs.readFile(filename, "utf8");
+    let selected = "none";
+    let model = "ettin-32m-effort-v1";
+    if (filename.endsWith(".toml")) {
+      const section = contents.match(/(?:^|\n)\s*\[providers\]([\s\S]*?)(?=\n\s*\[|$)/)?.[1] ?? "";
+      selected = section.match(/^\s*selected\s*=\s*"([^"]*)"/m)?.[1] ?? selected;
+      model = contents.match(/(?:^|\n)\s*\[providers\.local\][\s\S]*?^\s*model\s*=\s*"([^"]*)"/m)?.[1] ?? model;
+    } else {
+      const providers = (JSON.parse(contents) as { providers?: { selected?: string; local?: { model?: string } } }).providers;
+      selected = providers?.selected ?? selected;
+      model = providers?.local?.model ?? model;
+    }
+    if (selected !== "local") return { selected, label: selected === "jev" ? "Jev" : selected };
+    const family = model.split(/[-_/]/)[0];
+    return { selected, label: `${family[0].toUpperCase()}${family.slice(1)} (local model)` };
+  } catch {
+    return { selected: "none", label: "none" };
+  }
+}
+
 export async function routerEnabled(): Promise<boolean> {
   if (process.env.SYSTEM1ROUTER_OPENCODE_DISABLED === "1") return false;
   try {

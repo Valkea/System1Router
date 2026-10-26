@@ -8,7 +8,7 @@ import { consentDirectory, consentTimeoutMs, recordUsage, rememberedChoice, rout
 type RouterResult = {
   consent?: string;
   providerTrace?: string;
-  telemetry?: { routingClass?: string };
+  telemetry?: { routingClass?: string; providerModel?: string };
   diagnostic?: { code?: string };
   recommendation?: {
     provider?: string;
@@ -66,8 +66,15 @@ function appendVerboseTrace<Part extends object>(
   } as Part);
 }
 
-function routingStatusText(routingClass: string | undefined, model: string, variant?: string): string {
-  const source = routingClass ? `S1R / ${routingClass}` : "S1R";
+/** `jev-1.14.0` → Jev, `ettin-32m-effort-v1` → Ettin: which classifier decided. */
+function classifierFamily(model: string | undefined): string | undefined {
+  const family = model?.split(/[-_/]/)[0];
+  return family ? family[0].toUpperCase() + family.slice(1) : undefined;
+}
+
+function routingStatusText(routingClass: string | undefined, model: string, variant?: string, classifier?: string): string {
+  const label = classifier ? `S1R/${classifier}` : "S1R";
+  const source = routingClass ? `${label} / ${routingClass}` : label;
   return `╭─ → ${source}\n│  ◇ ${model}${variant ? ` · ${variant}` : ""}\n╰─\n`;
 }
 
@@ -552,9 +559,10 @@ export const System1RouterServer: Plugin = async ({ client, directory }) => {
 
       const recommendation = result.recommendation;
       const routingClass = recommendation?.routingClass ?? result.telemetry?.routingClass;
+      const classifier = classifierFamily(result.telemetry?.providerModel);
       if (!recommendation?.provider || !recommendation.model) {
         appendVerboseDetails();
-        prependRoutingStatus(input.sessionID, output.message.id, output, routingStatusText(routingClass, currentModelName, currentVariant));
+        prependRoutingStatus(input.sessionID, output.message.id, output, routingStatusText(routingClass, currentModelName, currentVariant, classifier));
         await recordUsage({ host: "opencode", model: current, policyOutcome: result.diagnostic?.code }).catch(() => {});
         return;
       }
@@ -562,13 +570,13 @@ export const System1RouterServer: Plugin = async ({ client, directory }) => {
       // A rule without a variant accepts whatever effort the current model uses.
       if (current === suggested && (!recommendation.variant || currentVariant === recommendation.variant)) {
         appendVerboseDetails();
-        prependRoutingStatus(input.sessionID, output.message.id, output, routingStatusText(routingClass, recommendation.model, recommendation.variant));
+        prependRoutingStatus(input.sessionID, output.message.id, output, routingStatusText(routingClass, recommendation.model, recommendation.variant, classifier));
         await recordUsage({ host: "opencode", model: current, policyOutcome: "same-model" }).catch(() => {});
         return;
       }
       if (result.consent === "keep_current_model") {
         appendVerboseDetails();
-        prependRoutingStatus(input.sessionID, output.message.id, output, routingStatusText(routingClass, currentModelName, currentVariant));
+        prependRoutingStatus(input.sessionID, output.message.id, output, routingStatusText(routingClass, currentModelName, currentVariant, classifier));
         await recordUsage({ host: "opencode", model: current, suggestedModel: suggested, accepted: false }).catch(() => {});
         return;
       }
@@ -592,20 +600,20 @@ export const System1RouterServer: Plugin = async ({ client, directory }) => {
           "warning",
         );
         appendVerboseDetails();
-        prependRoutingStatus(input.sessionID, output.message.id, output, routingStatusText(routingClass, currentModelName, currentVariant));
+        prependRoutingStatus(input.sessionID, output.message.id, output, routingStatusText(routingClass, currentModelName, currentVariant, classifier));
         await recordUsage({ host: "opencode", model: current, suggestedModel: suggested, policyOutcome: "consent-unavailable" }).catch(() => {});
         return;
       }
       if (!accepted) {
         appendVerboseDetails();
         // A remembered "never" is a standing choice, so show the model that answers.
-        if (remembered === false) prependRoutingStatus(input.sessionID, output.message.id, output, routingStatusText(routingClass, currentModelName, currentVariant));
+        if (remembered === false) prependRoutingStatus(input.sessionID, output.message.id, output, routingStatusText(routingClass, currentModelName, currentVariant, classifier));
         await recordUsage({ host: "opencode", model: current, suggestedModel: suggested, accepted: false, ...(remembered === false ? { remembered: true } : {}) }).catch(() => {});
         return;
       }
       if (!(await routerEnabled())) {
         appendVerboseDetails();
-        prependRoutingStatus(input.sessionID, output.message.id, output, routingStatusText(routingClass, currentModelName, currentVariant));
+        prependRoutingStatus(input.sessionID, output.message.id, output, routingStatusText(routingClass, currentModelName, currentVariant, classifier));
         await recordUsage({ host: "opencode", model: current, suggestedModel: suggested }).catch(() => {});
         return;
       }
@@ -618,7 +626,7 @@ export const System1RouterServer: Plugin = async ({ client, directory }) => {
         ...(recommendation.variant ? { variant: recommendation.variant } : {}),
       };
       appendVerboseDetails();
-      prependRoutingStatus(input.sessionID, output.message.id, output, routingStatusText(routingClass, recommendation.model, recommendation.variant));
+      prependRoutingStatus(input.sessionID, output.message.id, output, routingStatusText(routingClass, recommendation.model, recommendation.variant, classifier));
       await recordUsage({ host: "opencode", model: suggested, suggestedModel: suggested, accepted: true, ...(remembered ? { remembered: true } : {}) }).catch(() => {});
       await notify(
         `${key}:accepted`,

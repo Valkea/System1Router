@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import type { TuiPlugin } from "@opencode-ai/plugin/tui";
-import { configFilePath, consentDirectory, forgetPreferences, providerLogPath, readPreferences, readStats, rememberChoice, routerEnabled, verboseEnabled, writeJsonAtomic, type ConsentRequest } from "./shared";
+import { classifier, configFilePath, consentDirectory, forgetPreferences, providerLogPath, readPreferences, readStats, rememberChoice, routerEnabled, verboseEnabled, writeJsonAtomic, type ConsentRequest } from "./shared";
 
 function verboseStatePath(): string {
   return path.join(consentDirectory(), "verbose.json");
@@ -44,6 +44,17 @@ function writeOsc52(text: string): boolean {
   const passthrough = `\u001bPtmux;\u001b${sequence}\u001b\\`;
   process.stdout.write(process.env.TMUX ? sequence + passthrough : process.env.STY ? passthrough : sequence);
   return true;
+}
+
+/** Runs `system1router <args>` and returns its first output line. */
+function runRouter(args: string[]): Promise<string> {
+  return new Promise((resolve) => {
+    const child = spawn(process.env.SYSTEM1ROUTER_BIN ?? "system1router", args, { stdio: ["ignore", "pipe", "pipe"] });
+    const output: Buffer[] = [];
+    child.stdout?.on("data", (chunk: Buffer) => output.push(chunk));
+    child.once("error", (error) => resolve(error.message));
+    child.once("close", () => resolve(Buffer.concat(output).toString("utf8").trim().split("\n").pop() ?? ""));
+  });
 }
 
 function copyWithCommand(command: string, args: string[], text: string): Promise<boolean> {
@@ -223,6 +234,12 @@ export const System1RouterTui: TuiPlugin = async (api) => {
       await toggleRouter();
       return;
     }
+    if (action === "classifier-jev" || action === "classifier-local") {
+      const target = action === "classifier-jev" ? "jev" : "local";
+      if (target === "local") api.ui.toast({ title: "System1Router", message: "Switching to the local model (downloads it the first time)…", variant: "info" });
+      api.ui.toast({ title: "System1Router", message: await runRouter(["provider", target]), variant: "info" });
+      return;
+    }
     if (action === "config") {
       await copyConfigPath();
       return;
@@ -238,13 +255,14 @@ export const System1RouterTui: TuiPlugin = async (api) => {
   };
 
   const openControlPanel = async () => {
-    const [enabled, verbose, preferences] = await Promise.all([routerEnabled(), verboseEnabled(), readPreferences()]);
+    const [enabled, verbose, preferences, current] = await Promise.all([routerEnabled(), verboseEnabled(), readPreferences(), classifier()]);
     api.ui.dialog.replace(
       () =>
         api.ui.DialogSelect({
           title: "System1Router",
           options: [
             { title: `Router: ${enabled ? "ON" : "OFF"}`, value: "toggle-router", description: "Toggle routing.enabled in the active config" },
+            { title: `Classifier: ${current.label}`, value: current.selected === "local" ? "classifier-jev" : "classifier-local", description: current.selected === "local" ? "Switch to Jev" : "Switch to the local model (system1router provider local)" },
             { title: `Verbose traces: ${verbose ? "ON" : "OFF"}`, value: "verbose", description: "Show redacted Jev exchanges with each prompt" },
             { title: "Copy config path…", value: "config", description: configFilePath() },
             { title: "Copy provider log path…", value: "logs", description: providerLogPath() },

@@ -171,12 +171,31 @@ fn provider_ready(config: &Config) -> bool {
     match config.providers.selected.as_str() { "jev" => summary["jevConfigured"] == true, "laya" => summary["layaConfigured"] == true, "local" => summary["localInstalled"] == true, _ => false }
 }
 
+/// A classifier model's family, as the UIs name it: `jev-1.14.0` is Jev,
+/// `ettin-32m-effort-v1` is Ettin.
+pub fn classifier_family(model: &str) -> String {
+    let family = model.split(['-', '_', '/']).next().unwrap_or(model);
+    let mut letters = family.chars();
+    letters.next().map(|first| first.to_uppercase().chain(letters).collect()).unwrap_or_default()
+}
+
+/// What classifies prompts: `Jev (jev-1.14.0)`, `Ettin (local model ettin-32m-effort-v1)`.
+pub fn classifier_label(config: &Config) -> String {
+    let providers = &config.providers;
+    match providers.selected.as_str() {
+        "jev" => providers.jev.model.as_deref().map_or("Jev".into(), |model| format!("Jev ({model})")),
+        "local" => format!("{} (local model {})", classifier_family(&providers.local.model), providers.local.model),
+        "laya" => "Laya".into(),
+        other => other.into(),
+    }
+}
+
 pub fn status_text(config: &Config, path: Option<&Path>) -> String {
     let path = path.map(Path::to_path_buf).or_else(default_config_path);
     format!(
-        "Routing {} · provider {}{} · {} rule(s) · config {} · provider log {}",
+        "Routing {} · classifier {}{} · {} rule(s) · config {} · provider log {}",
         if config.routing.enabled { "ON" } else { "OFF" },
-        config.providers.selected,
+        classifier_label(config),
         if provider_ready(config) { "" } else { " (not configured)" },
         config.rules.len(),
         path.map(|path| path.display().to_string()).unwrap_or_else(|| "(none)".into()),
@@ -192,6 +211,8 @@ pub fn panel(config: &Config, path: Option<&Path>) -> Value {
         "status": {
             "enabled": config.routing.enabled,
             "provider": config.providers.selected,
+            "classifier": if config.providers.selected == "local" { classifier_family(&config.providers.local.model) } else { classifier_family(&config.providers.selected) },
+            "classifierLabel": classifier_label(config),
             "providerReady": provider_ready(config),
             "rules": config.rules.len(),
             "claudeCodeRules": config.rules.iter().filter(|rule| rule.host.as_deref() == Some("claude-code")).count(),
@@ -278,6 +299,20 @@ fn write_preferences(path: &Path, preferences: &[Preference]) -> Result<(), Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_classifier_is_named_for_the_uis() {
+        assert_eq!((classifier_family("jev-1.14.0"), classifier_family("ettin-32m-effort-v1"), classifier_family("")), ("Jev".into(), "Ettin".into(), String::new()));
+        let mut config = Config::default();
+        config.providers.selected = "jev".into();
+        assert_eq!(classifier_label(&config), "Jev");
+        config.providers.jev.model = Some("jev-1.14.0".into());
+        assert_eq!(classifier_label(&config), "Jev (jev-1.14.0)");
+        config.providers.selected = "local".into();
+        assert_eq!(classifier_label(&config), "Ettin (local model ettin-32m-effort-v1)");
+        assert!(status_text(&config, None).contains("classifier Ettin (local model ettin-32m-effort-v1)"));
+        assert_eq!(panel(&config, None)["status"]["classifier"], "Ettin");
+    }
 
     #[test]
     fn consent_styles_edit_json_and_toml() {

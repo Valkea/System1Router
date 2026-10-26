@@ -50,7 +50,7 @@ test("loads router commands and handles confirmation, cancel and timeout", async
     expect(commands[0]?.slash.aliases).toEqual(["s1router_toggle"]);
     commands[1]!.onSelect();
     await Bun.sleep(30);
-    expect(dialog?.options?.map((option) => option.value)).toEqual(["toggle-router", "verbose", "config", "logs", "forget"]);
+    expect(dialog?.options?.map((option) => option.value)).toEqual(["toggle-router", "classifier-local", "verbose", "config", "logs", "forget"]);
     dialog?.onSelect?.({ value: "toggle-router" });
     await Bun.sleep(50);
     expect(JSON.parse(await fs.readFile(process.env.SYSTEM1ROUTER_CONFIG, "utf8")).routing.enabled).toBe(false);

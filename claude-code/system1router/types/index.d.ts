@@ -44,6 +44,9 @@ export type Panel = {
   status: {
     enabled: boolean
     provider: string
+    /** The classifier's family (`Jev`, `Ettin`) and a longer label for the pane. */
+    classifier?: string
+    classifierLabel?: string
     providerReady: boolean
     rules: number
     claudeCodeRules: number
