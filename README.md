@@ -1,5 +1,13 @@
 # System1Router
 
+[![crates.io](https://img.shields.io/crates/v/system1router.svg)](https://crates.io/crates/system1router)
+[![Release](https://github.com/Valkea/System1Router/actions/workflows/release.yml/badge.svg)](https://github.com/Valkea/System1Router/actions/workflows/release.yml)
+[![Model on Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97%20model-System1Router--effort-yellow)](https://huggingface.co/Valkea/System1Router-effort)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Rust 1.89+](https://img.shields.io/badge/rust-1.89%2B-orange.svg)
+![Platforms](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-lightgrey.svg)
+![Works with Claude Code and OpenCode](https://img.shields.io/badge/works%20with-Claude%20Code%20%7C%20OpenCode-8A2BE2.svg)
+
 **Sets the reasoning effort of every prompt you send to Claude Code or OpenCode, automatically.**
 
 Coding assistants run every turn at one effort level. Set it high and "rename this variable" or "yes, go ahead" burn minutes of thinking and tokens; set it low and the hard bug gets a shallow answer. Switching by hand with `/effort` (or an OpenCode variant) every prompt is tedious, so nobody does it.
@@ -36,7 +44,7 @@ Then restart Claude Code and OpenCode. The status line shows `S1R on · Ettin`, 
 - `system1router install` asks which assistants and which scope (all projects or this one), then downloads the model into `~/.local/share/system1router/models/`. In Claude Code it installs the mod into `~/.local/share/system1router/claude-code-mod` and names it in `env.CLAUDE_CODE_PLUGIN_DIRS` of `~/.claude/settings.json`.
 - `system1router toggle on` writes `~/.config/system1router/config.json` if it does not exist. Defaults: effort routing, local model, ask before changing the effort. `system1router consent auto|confirm|menu` changes how a new effort is confirmed; `system1router doctor` checks the setup.
 
-With Rust 1.89 or newer, `cargo install system1router` builds the same binary instead of `install.sh`.
+With Rust 1.89 or newer, `cargo install system1router` builds the same binary instead of `install.sh`. `system1router update` later installs a newer published version (`--check` only reports it).
 
 ### From source
 
@@ -52,64 +60,58 @@ The earlier model-switching router lives on the `model-routing` branch.
 
 ## Configure
 
-The config lives in `~/.config/system1router/config.json`; the commands above create and edit it. To start from the full example instead:
+The config lives in `~/.config/system1router/config.json`; `toggle`, `provider` and `consent` create and edit it. JSON, or TOML when the file name ends in `.toml`. All fields: [docs/CONFIGURATION.md](docs/CONFIGURATION.md). To start from the full example instead:
 
 ```sh
-mkdir -p "$HOME/.config/system1router"
-cp config.example.json "$HOME/.config/system1router/config.json"
-export SYSTEM1ROUTER_CONFIG="$HOME/.config/system1router/config.json"
+mkdir -p ~/.config/system1router
+cp config.example.json ~/.config/system1router/config.json
 ```
 
-Routing is off until `system1router toggle on` (`routing.enabled`). The effort swap needs no rules; the model swap needs a provider and at least one catalog-validated rule. `routing.swap` chooses what routing changes: `model` switches to the model a rule names, `effort` (default) keeps the model and sets the reasoning effort `effort.levels` gives the request's class, with no rules needed (in Claude Code this needs the mod). Configuration accepts JSON, or TOML when the file name ends in `.toml`. See `docs/CONFIGURATION.md` for all fields.
+| Command | What |
+|---|---|
+| `system1router toggle [on\|off]` | Routing on or off (`/s1router_toggle` in both assistants) |
+| `system1router consent auto\|confirm\|menu` | Apply each effort, confirm it (yes/no), or pick it from a menu (`/s1router_consent` in Claude Code) |
+| `system1router provider local\|jev` | Which classifier decides (Laya: set `providers.selected` in the config) |
+| `system1router status`, `stats`, `doctor` | State, effort counts and acceptance, setup problems |
 
-Installing the plugin is intentionally not the same as enabling routing: installation must not change a host’s model or send prompts to a provider before the user configures consent, privacy, provider credentials, and policy. On the first OpenCode message, the plugin displays a one-time status notification explaining that routing is disabled. Run `system1router doctor` to inspect the state, then enable routing after provider setup.
+`routing.swap` chooses what a decision changes: `effort` (default) keeps the model and sets its reasoning effort from `effort.levels`; `model` switches to the model a rule names, which needs rules and loses the prompt cache (see [Model swap](#model-swap)). Installing never changes anything by itself: nothing is classified until `system1router toggle on`.
 
-### Jev
+### Classifiers
 
-Keep the Jev API key out of the JSON file. Put it in an environment variable and reference the variable by name:
+The classifier reads the prompt and its recent context and decides how hard the turn is. Pick one with `system1router provider local|jev`, or `providers.selected` in the config.
+
+<details open>
+<summary><b>Local model (Ettin)</b>: default, on this machine, no key</summary>
+
+[Ettin-32M](https://huggingface.co/jhu-clsp/ettin-encoder-32m) fine-tuned to predict the effort directly from the prompt and its context ([model card](https://huggingface.co/Valkea/System1Router-effort), [training](experiments/TRAINING.md)). It needs no key and sends nothing over the network. On held-out sessions it picks the judge's effort 60% of the time, against 54% for Jev ([experiments/RESULTS.md](experiments/RESULTS.md), section 4).
 
 ```sh
-export JEV_API_KEY='replace-with-your-key'
-export JEV_BASE_URL='https://api.typesafe.ai/v1/systemone'
+system1router provider local    # downloads the model (130 MB) the first time
 ```
 
-As a fallback for hooks and GUI-launched clients, the executable also loads `~/.config/system1router/.env`:
-
-```dotenv
-# Replace the empty value with your Jev key.
-JEV_API_KEY=
-JEV_BASE_URL=https://api.typesafe.ai/v1/systemone
-```
-
-Already-exported process variables take precedence over `.env`. `system1router doctor` reports Jev as unconfigured until the key is non-empty. Keep this file private and never commit it.
+One background process (`system1router model serve`) holds the model for every Claude Code and OpenCode session. The first prompt, or the start of a session, launches it in about half a second; afterwards a prompt takes about 10 ms. It exits 30 seconds after the last assistant that used it closes, or after `idleMinutes` without a prompt. `system1router model status|start|stop` inspects and controls it; its errors go to `~/.local/state/system1router/model.log`.
 
 ```json
-{
-  "providers": {
-    "selected": "jev",
-    "jev": {
-      "baseUrl": "https://api.typesafe.ai/v1/systemone",
-      "credentialEnv": "JEV_API_KEY",
-      "model": "jev-latest"
-    }
-  }
+"providers": {
+  "selected": "local",
+  "local": { "model": "ettin-32m-effort-v1", "threads": 2, "idleMinutes": 30 }
 }
 ```
 
-Use `endpoint` when TypeSafe gives you an exact System One endpoint, or `baseUrl`/`JEV_BASE_URL` for deployment-provided URL configuration. The adapter sends a bounded TypeSafe System One request with `state`, `model`, and routing questions, then maps the `answers` response into the normalized routing classification. Native HTTP and HTTPS transport are supported. Remote provider calls allow up to 3 seconds by default; hook execution allows up to 6 seconds. `doctor` only reports whether the endpoint and credential are configured, never the key.
+The three files (`<model>.json`, `<model>.onnx`, `<model>.tokenizer.json`) download from [Valkea/System1Router-effort](https://huggingface.co/Valkea/System1Router-effort) into `~/.local/share/system1router/models/<model>/`. `url` (a folder URL or path) or `system1router provider local --from <folder or URL>` points elsewhere, for a model you trained yourself.
 
-### Laya
+</details>
 
-Laya can run as a local worker process or as a configured local HTTP runtime. It never falls back to Jev implicitly:
+<details>
+<summary><b>Laya</b>: your own local worker</summary>
+
+Laya runs as a local worker process or a local HTTP runtime that you provide. It never falls back to another provider:
 
 ```json
 {
   "providers": {
     "selected": "laya",
-    "laya": {
-      "command": "laya-router-worker",
-      "startupTimeoutMs": 1000
-    }
+    "laya": { "command": "laya-router-worker", "startupTimeoutMs": 1000 }
   }
 }
 ```
@@ -120,73 +122,71 @@ For a local HTTP worker, use `endpoint`, `baseUrl`, or `LAYA_BASE_URL`:
 export LAYA_BASE_URL='http://127.0.0.1:8788/classify'
 ```
 
-The worker receives the same bounded decision request as Jev and returns the normalized classification directly or under `classification`. Use `command` for a managed local process, or `baseUrl` for a separately supervised local runtime. A missing or unhealthy Laya runtime produces a fail-open classification-unavailable outcome.
+The worker receives the same bounded request as Jev and returns the normalized classification directly or under `classification`. Use `command` for a managed local process, or `baseUrl` for a separately supervised runtime. A missing or unhealthy worker means no classification, and the prompt goes through unchanged.
 
-### Local model (Ettin)
+</details>
 
-`local` runs an effort classifier on this machine: [Ettin-32M](https://huggingface.co/jhu-clsp/ettin-encoder-32m) fine-tuned on judged coding-assistant prompts (`experiments/TRAINING.md`). It needs no key, sends nothing over the network, and predicts the effort directly. On held-out prompts it matched the judge's effort 60% of the time, against 54% for Jev (`experiments/RESULTS.md`, section 4). Switch to it, or back to Jev:
+<details>
+<summary><b>Jev</b>: hosted by TypeSafe, needs an API key</summary>
 
-```sh
-system1router provider local    # installs the model (130 MB) the first time
-system1router provider jev
+Keep the key out of the JSON file: put it in an environment variable, or in `~/.config/system1router/.env` for hooks and GUI-launched assistants (exported variables win). Keep that file private and never commit it.
+
+```dotenv
+JEV_API_KEY=
+JEV_BASE_URL=https://api.typesafe.ai/v1/systemone
 ```
 
-One background process (`system1router model serve`) holds the model for every Claude Code and OpenCode session. The first prompt, or the start of a session, launches it in about half a second; afterwards a prompt takes about 10 ms. It exits 30 seconds after the last assistant that used it closes, or after `idleMinutes` without a prompt. `system1router model status|start|stop` inspects and controls it. Its errors go to `~/.local/state/system1router/model.log`.
-
 ```json
-"providers": {
-  "selected": "local",
-  "local": { "model": "ettin-32m-effort-v1", "threads": 2, "idleMinutes": 30 }
+{
+  "providers": {
+    "selected": "jev",
+    "jev": { "baseUrl": "https://api.typesafe.ai/v1/systemone", "credentialEnv": "JEV_API_KEY", "model": "jev-latest" }
+  }
 }
 ```
 
-The model's three files (`<model>.json`, `<model>.onnx` and `<model>.tokenizer.json`) are downloaded from [Valkea/System1Router-effort](https://huggingface.co/Valkea/System1Router-effort) on Hugging Face, which also has the model card. `url` (a folder URL or path) or `system1router provider local --from <folder or URL>` points elsewhere.
+Use `endpoint` when TypeSafe gives you an exact System One endpoint, or `baseUrl`/`JEV_BASE_URL` otherwise. The router sends a bounded, redacted request with routing questions and maps the answers to a class, which `effort.levels` turns into an effort. Calls time out after 3 seconds by default. `system1router doctor` reports whether the endpoint and key are set, never the key.
 
-## Install Host Hooks
+</details>
 
-Install for the coding assistants found on this machine:
+## Assistants
+
+`system1router install` lists the detected assistants and asks which to install for, then **This project only** or **All projects for this user**. For scripts: `--host opencode|claude-code|all` and `--scope project|global`. `system1router uninstall --host <host> --scope <scope>` removes only what the installer created. Restart the assistant afterwards.
+
+- **Claude Code**: the System1Router mod, written to `~/.local/share/system1router/claude-code-mod` and named in `env.CLAUDE_CODE_PLUGIN_DIRS` of the settings. Before each prompt is sent it sets the turn's effort, after a native dialog if `consent` asks for one, and shows the decision in the status line (`S1R/Ettin · code_hard → xhigh`). `/s1router` opens a pane with the state and recent decisions; `/s1router_consent` chooses how an effort is confirmed. Open a prompt with `[low]` … `[max]` to choose its effort yourself; pressing Esc and resending with a tag records a correction. A `UserPromptSubmit` hook adds `/s1router_toggle`, `/s1router_config` and `/s1router_stats`, which run without a model turn. Details: [docs/CLIENTS.md](docs/CLIENTS.md#claude-code-mod).
+- **OpenCode**: server and TUI plugins under `.opencode/` or `~/.config/opencode/`. The effort becomes the model's nearest variant for that request. `/s1router_config` opens a menu to toggle routing, switch the classifier, show traces and copy the config path; `/s1router_stats` shows counts and acceptance. Each prompt starts with a compact `S1R/Ettin / class` block, excluded from model context.
+
+What the classifier sees: the current prompt plus recent conversation, tool use and file references, redacted and bounded by `redaction.maxContextChars` (4,000 characters). Provider exchanges are logged locally in `~/.local/state/system1router/provider-debug.jsonl`, usage stats in `usage.jsonl`.
+
+<details>
+<summary><b>Model swap</b> (<code>routing.swap: "model"</code>)</summary>
+
+<a id="model-swap"></a>
+Rules map a class to a target model; the assistant switches to it for that request. Switching models discards the prompt cache, which is why effort is the default. The earlier version built around this lives on the `model-routing` branch.
+
+In OpenCode a native dialog offers the suggested model before generation (**Use suggested** by default; **Always switch** / **Never switch for this pair** remember the answer; Escape or the `timeouts.consentMs` countdown keeps the current model). In Claude Code the mod switches the model of the turn; the plain hook can only show the suggestion and its `/model` command. Rules for Claude Code use `"host": "claude-code"` and Anthropic targets (`opus`, `sonnet`, `haiku`). `system1router prices --refresh` shows each target's price (LiteLLM table), used by the cache guard. See [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
+
+</details>
+
+<details>
+<summary><b>Other hosts</b> (Codex, Copilot, generic): advisory command hooks</summary>
+
+Install one ownership-marked hook per host; repeating `init` is idempotent and `uninstall` removes only System1Router-owned entries. `--host-config <path>` targets a non-default host config.
 
 ```sh
-system1router install
-```
-
-The installer lists the detected assistants (OpenCode, Claude Code) and asks which to install for, then asks for **This project only** or **All projects for this user**. For scripts, pass `--host opencode|claude-code|all` and `--scope project|global`.
-
-- **OpenCode**: server and TUI plugins under `.opencode/` or `~/.config/opencode/`. Routing switches the model of the request itself after you confirm.
-- **Claude Code**: a `UserPromptSubmit` hook in `.claude/settings.local.json` or `~/.claude/settings.json`. Claude Code cannot switch models from a hook, so the suggestion and its `/model` command are shown above the reply. Add rules with `"host": "claude-code"` and Anthropic targets (`opus`, `sonnet`, `haiku`). `/s1router_toggle`, `/s1router_config` and `/s1router_stats` work there too, without using a model turn.
-- **Claude Code mod** (early-access mod API, verified with Claude Code 2.1.294): `claude-code/system1router/` switches the model of the turn itself after a native consent dialog, shows the decision in the status line and adds a `/s1router` dashboard. See [docs/CLIENTS.md](docs/CLIENTS.md#claude-code-mod).
-
-The same controls are available from any shell: `system1router toggle [on|off]`, `system1router status`, `system1router stats`. `system1router uninstall --host opencode --scope <scope>` removes only files created by this installer. If a project already includes the System1Router plugin, it is already installed locally; the global option warns about loading both copies in that project.
-
-Use `system1router update` to check crates.io for a newer published version and install it. `system1router update --check` only checks. The package must be published to crates.io for remote updates to be available; when run from the source checkout, `update` installs that checkout.
-
-Inspect the detected host contracts and current provider/configuration state first:
-
-```sh
-system1router doctor
-```
-
-Install one ownership-marked hook per command-hook host. Repeating `init` is idempotent and `uninstall` removes only System1Router-owned entries:
-
-```sh
-system1router init --host claude-code
 system1router init --host codex
 system1router init --host copilot-cli
 system1router init --host copilot-vscode
 system1router init --host generic
 ```
 
-Use `--host-config /path/to/host-config.json` for a test or non-default host configuration. OpenCode loads server plugins from its plugin directories and TUI plugins from `tui.json`; the installer registers both for the selected scope. Restart OpenCode after installation or plugin updates. In the interactive TUI, System1Router displays a native model choice before generation. Accepting applies the recommended model and variant to that same request; declining or timing out keeps the current model. Headless OpenCode runs fail open without changing models.
-
-OpenCode offers three router commands: `/s1router_toogle` (also accepts `/s1router_toggle`) flips routing on/off; `/s1router_config` opens the menu to toggle routing and verbose traces or copy the config and provider-log paths; `/s1router_stats` shows calls by model and the share of answered suggestions accepted. The config file must exist to use the toggle. Routing status is prepended to the prompt as a compact S1R/class/model/variant block and is excluded from model context. Classification receives the current prompt unchanged plus recent conversation text, tool results/usage, and file references. This context is redacted and bounded by `redaction.maxContextChars` (4,000 characters by default). In verbose mode, expand the native Thought section to inspect the router input and redacted System One request/response. These trace parts are excluded from model context. Provider exchanges are stored in `~/.local/state/system1router/provider-debug.jsonl` (or `$XDG_STATE_HOME/system1router/provider-debug.jsonl`). Usage stats are stored locally in `usage.jsonl` alongside the core's `events.jsonl`; disabling telemetry disables new stats. The native executable reads config and `.env` for every request; changes to plugin files need an OpenCode restart.
-
-The model confirmation shows the routing category, has no search field, and selects **Use suggested** by default. **Always switch** / **Never switch for this pair** remember the answer for that current → suggested pair so the dialog is not shown again for it; `/s1router_config` lists and forgets remembered choices. Move between **Use suggested** and **Keep current** to reset the live countdown; Enter selects, and Escape keeps the current model. Set `timeouts.consentMs` in the active router config to change the countdown duration (e.g. `120000` for two minutes). Expiry keeps the current model.
-
-Smoke-test the normalized protocol without intercepting a real client:
+Smoke-test the protocol without a real client:
 
 ```sh
 printf '%s\n' '{"protocolVersion":"1","host":"generic","event":"user_prompt","sessionId":"demo","request":{"query":"Explain this error"}}' | system1router
 ```
+
+</details>
 
 ## Commands
 
@@ -194,6 +194,10 @@ printf '%s\n' '{"protocolVersion":"1","host":"generic","event":"user_prompt","se
 system1router --version
 system1router --help
 system1router install --scope global
+system1router toggle on
+system1router consent menu
+system1router provider local
+system1router model status
 system1router update --check
 system1router doctor --config ~/.config/system1router/config.json
 system1router prices --refresh
