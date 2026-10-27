@@ -1,20 +1,23 @@
 # Release and Packaging
 
-Build each supported target with a pinned Rust toolchain and archive the executable, `README.md`, and `docs/`:
+A release ships the `system1router` binary for Linux and macOS (GitHub release, used by `install.sh`) and the crate (crates.io, used by `cargo install system1router` and `system1router update`). The local model is not part of either: it stays in `models/` (Git LFS) and the binary downloads it from GitHub on first use.
 
-```sh
-cargo test --all-targets
-cargo build --release --target x86_64-unknown-linux-gnu
-cargo build --release --target aarch64-apple-darwin
-cargo build --release --target x86_64-pc-windows-msvc
-```
+1. Bump `version` in `Cargo.toml`, run all checks (see `CLAUDE.md`), commit.
+2. Check the crate holds the sources the binary embeds (OpenCode plugin, Claude Code mod) and nothing else:
 
-The executable embeds the OpenCode server/TUI plugin sources so `system1router install` can install them at either scope. Check that Cargo packages those assets, then publish each version to crates.io to enable `system1router update`:
+   ```sh
+   cargo package --list
+   cargo publish --dry-run
+   ```
 
-```sh
-cargo package --list
-cargo publish --dry-run
-cargo publish
-```
+3. Tag and push. `.github/workflows/release.yml` tests and builds `x86_64` and `aarch64` for Linux and macOS, then creates the release with `system1router-<target>.tar.gz` and `SHA256SUMS`:
 
-The one-shot protocol is the compatibility baseline. A daemon must not be enabled unless startup latency measurements justify it, and it must fall back to the one-shot executable without changing routing semantics. Run `system1router doctor`, installer idempotence tests, and host fixture tests before enabling routing in a release.
+   ```sh
+   git tag v0.2.0 && git push origin v0.2.0
+   ```
+
+4. Publish the crate: `cargo publish` (needs `cargo login` once).
+
+A new model gets a new name (`ettin-32m-effort-v2`): add its three files to `models/`, change the default `providers.local.model` in `src/config.rs`, and release. Installed copies of the old model are never overwritten in place.
+
+Windows is not built: the shared model process uses Unix sockets.

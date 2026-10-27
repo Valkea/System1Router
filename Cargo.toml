@@ -4,16 +4,16 @@ version = "0.1.0"
 edition = "2021"
 description = "Sets the reasoning effort of each Claude Code or OpenCode prompt with a local classifier"
 license = "MIT"
-rust-version = "1.78"
+rust-version = "1.89"
 repository = "https://github.com/Valkea/System1Router"
 readme = "README.md"
 keywords = ["claude-code", "opencode", "llm", "router", "effort"]
 categories = ["command-line-utilities", "development-tools"]
 # The model (models/, Git LFS) is downloaded on first use; the crate keeps the
 # sources the binary embeds.
-include = ["src/**", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE", "config.example.json", "docs/*.md",
-           ".opencode/plugins/system1router/*.ts", "!.opencode/plugins/system1router/*.test.ts",
-           "claude-code/system1router/.claude-plugin/plugin.json", "claude-code/system1router/hooks/*", "claude-code/system1router/types/*", "claude-code/system1router/tsconfig.json"]
+include = ["/src/**", "/Cargo.toml", "/Cargo.lock", "/README.md", "/LICENSE", "/config.example.json", "/docs/*.md",
+           "/.opencode/plugins/system1router/*.ts", "!/.opencode/plugins/system1router/*.test.ts",
+           "/claude-code/system1router/.claude-plugin/plugin.json", "/claude-code/system1router/hooks/*", "/claude-code/system1router/types/*", "/claude-code/system1router/tsconfig.json"]
 
 [lib]
 name = "system1router_core"
