@@ -78,7 +78,7 @@ Provider credentials are referenced by environment variable name (`credentialEnv
 | Field | Default | Meaning |
 |---|---|---|
 | `model` | `ettin-32m-effort-v1` | The model's name; its files live in `$XDG_DATA_HOME/system1router/models/<model>/`. |
-| `url` | none | Folder holding `<model>.json`, `<model>.onnx` and `<model>.tokenizer.json`: a GitHub release's download URL or a local folder. `system1router provider local` and `system1router model install` download from it. |
+| `url` | none | Folder holding `<model>.json`, `<model>.onnx` and `<model>.tokenizer.json`: a URL or a local folder. `system1router provider local` and `system1router model install` download from it; without it they copy from `models/` (Git LFS) in the checkout the binary was built from. |
 | `threads` | `2` | ONNX Runtime threads of the model process. |
 | `idleMinutes` | `30` | The model process exits after this long without a prompt. It also exits 30 seconds after the last assistant process that used it has ended. |
 

@@ -138,7 +138,7 @@ This writes the three files `providers.local.url` points at: `<name>.onnx` (grap
 system1router provider local --from ~/.local/state/system1router/dataset/package
 ```
 
-To publish, attach the three files to a GitHub release and set `providers.local.url` (and the default in `src/config.rs`) to `https://github.com/<owner>/<repo>/releases/download/<tag>`. A new model gets a new name (`-v2`), so installed copies are never overwritten in place.
+To publish, copy the three files into the repository's `models/` folder and commit them: `.gitattributes` stores `models/*.onnx` and `models/*.tokenizer.json` with Git LFS, so `git lfs install` must have run first. A binary built from that checkout installs the model from it; `providers.local.url` can point at any other folder or URL holding the three files. A new model gets a new name (`-v2`), so installed copies are never overwritten in place.
 
 The router builds the model's input the way `train_classifier.encode` does, from context rendered as `dataset_extract.render` renders it (`src/local_model.rs`). Change one side, change the other.
 

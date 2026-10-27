@@ -94,7 +94,7 @@ The worker receives the same bounded decision request as Jev and returns the nor
 `local` runs an effort classifier on this machine: [Ettin-32M](https://huggingface.co/jhu-clsp/ettin-encoder-32m) fine-tuned on judged coding-assistant prompts (`experiments/TRAINING.md`). It needs no key, sends nothing over the network, and predicts the effort directly. On held-out prompts it matched the judge's effort 60% of the time, against 54% for Jev (`experiments/RESULTS.md`, section 4). Switch to it, or back to Jev:
 
 ```sh
-system1router provider local    # downloads the model (130 MB) the first time
+system1router provider local    # installs the model (130 MB) the first time
 system1router provider jev
 ```
 
@@ -103,11 +103,11 @@ One background process (`system1router model serve`) holds the model for every C
 ```json
 "providers": {
   "selected": "local",
-  "local": { "model": "ettin-32m-effort-v1", "url": "https://github.com/<owner>/<repo>/releases/download/<tag>", "threads": 2, "idleMinutes": 30 }
+  "local": { "model": "ettin-32m-effort-v1", "threads": 2, "idleMinutes": 30 }
 }
 ```
 
-`url` is the folder the three model files are downloaded from (`<model>.json`, `<model>.onnx` and `<model>.tokenizer.json`); `system1router provider local --from <folder or URL>` overrides it once. The files land in `~/.local/share/system1router/models/<model>/`. Unlike Jev, the model predicts an effort, not a class: in an effort swap the router applies it as is (through the class that `effort.levels` maps to it); `routing.classSelection` picks the top effort (`argmax`), the median, or the highest effort holding 20% of the probability (`upper`).
+The model's three files (`<model>.json`, `<model>.onnx` and `<model>.tokenizer.json`) are stored with [Git LFS](https://git-lfs.com) in `models/`. Install `git-lfs` before cloning (or run `git lfs pull` after), and `cargo install --path .` builds a binary that installs the model from that checkout. `url` (a folder URL) or `system1router provider local --from <folder or URL>` points elsewhere. The files land in `~/.local/share/system1router/models/<model>/`. Unlike Jev, the model predicts an effort, not a class: in an effort swap the router applies it as is (through the class that `effort.levels` maps to it); `routing.classSelection` picks the top effort (`argmax`), the median, or the highest effort holding 20% of the probability (`upper`).
 
 ## Install Host Hooks
 
