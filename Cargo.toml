@@ -1,6 +1,6 @@
 [package]
 name = "system1router"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "Sets the reasoning effort of each Claude Code or OpenCode prompt with a local classifier"
 license = "MIT"

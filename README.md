@@ -31,7 +31,7 @@ Under the hood, the `system1router` executable reads one JSON event on stdin and
 
 ## Install
 
-On Linux or macOS:
+On macOS, or Linux with glibc 2.38 or newer (Ubuntu 24.04, Debian 13, Fedora 39):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Valkea/System1Router/main/install.sh | sh
