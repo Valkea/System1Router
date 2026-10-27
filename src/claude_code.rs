@@ -525,6 +525,64 @@ pub fn uninstall(path: &Path) -> Result<Value, String> {
     Ok(json!({ "host": "claude-code", "status": "uninstalled", "path": path }))
 }
 
+/// The mod's files, embedded so `system1router install` needs no checkout.
+const MOD_FILES: [(&str, &str); 5] = [
+    (".claude-plugin/plugin.json", include_str!("../claude-code/system1router/.claude-plugin/plugin.json")),
+    ("hooks/hooks.json", include_str!("../claude-code/system1router/hooks/hooks.json")),
+    ("hooks/register.tsx", include_str!("../claude-code/system1router/hooks/register.tsx")),
+    ("types/index.d.ts", include_str!("../claude-code/system1router/types/index.d.ts")),
+    ("tsconfig.json", include_str!("../claude-code/system1router/tsconfig.json")),
+];
+const PLUGIN_DIRS: &str = "CLAUDE_CODE_PLUGIN_DIRS";
+
+/// Where `system1router install` writes the mod: `~/.local/share/system1router/claude-code-mod`.
+pub fn mod_directory() -> Option<PathBuf> { crate::local_model::data_directory().map(|dir| dir.join("claude-code-mod")) }
+
+fn same_folder(entry: &str, folder: &Path) -> bool {
+    let expanded = match (entry.strip_prefix("~/"), env::var("HOME")) { (Some(rest), Ok(home)) => Path::new(&home).join(rest), _ => PathBuf::from(entry) };
+    expanded.components().eq(folder.components())
+}
+
+/// Writes the mod to `folder` and names it in the settings' `env.CLAUDE_CODE_PLUGIN_DIRS`
+/// (folders separated by `:`), so every session loads it.
+pub fn install_mod(path: &Path, folder: &Path) -> Result<Value, String> {
+    let mut changed = false;
+    for (name, contents) in MOD_FILES {
+        let target = folder.join(name);
+        if fs::read_to_string(&target).is_ok_and(|current| current == contents) { continue; }
+        if let Some(parent) = target.parent() { fs::create_dir_all(parent).map_err(|error| format!("create {}: {error}", parent.display()))?; }
+        fs::write(&target, contents).map_err(|error| format!("write {}: {error}", target.display()))?;
+        changed = true;
+    }
+    let mut root = read_settings(path)?;
+    let env = root.as_object_mut().ok_or("Claude Code settings must be a JSON object")?.entry("env").or_insert_with(|| json!({})).as_object_mut().ok_or("Claude Code `env` must be an object")?;
+    let current = env.get(PLUGIN_DIRS).and_then(Value::as_str).unwrap_or("").to_string();
+    if !current.split(':').any(|entry| same_folder(entry, folder)) {
+        env.insert(PLUGIN_DIRS.into(), json!(if current.is_empty() { folder.display().to_string() } else { format!("{current}:{}", folder.display()) }));
+        write_settings(path, &root)?;
+        changed = true;
+    }
+    Ok(json!({ "status": if changed { "installed" } else { "already-installed" }, "folder": folder }))
+}
+
+/// Removes the mod's folder from the settings' `CLAUDE_CODE_PLUGIN_DIRS`, and with
+/// `files` (a global uninstall) the folder itself.
+pub fn uninstall_mod(path: &Path, folder: &Path, files: bool) -> Result<bool, String> {
+    let mut root = read_settings(path)?;
+    let mut removed = false;
+    if let Some(env) = root.get_mut("env").and_then(Value::as_object_mut) {
+        if let Some(current) = env.get(PLUGIN_DIRS).and_then(Value::as_str).map(str::to_owned) {
+            let kept: Vec<&str> = current.split(':').filter(|entry| !same_folder(entry, folder)).collect();
+            removed = kept.len() != current.split(':').count();
+            if kept.is_empty() { env.remove(PLUGIN_DIRS); } else { env.insert(PLUGIN_DIRS.into(), json!(kept.join(":"))); }
+        }
+        if env.is_empty() { root.as_object_mut().map(|object| object.remove("env")); }
+    }
+    if removed { write_settings(path, &root)?; }
+    if files && folder.join(MOD_FILES[0].0).is_file() { fs::remove_dir_all(folder).map_err(|error| format!("remove {}: {error}", folder.display()))?; removed = true; }
+    Ok(removed)
+}
+
 pub fn is_installed(path: &Path) -> bool {
     read_settings(path).ok().and_then(|root| root.get("hooks")?.get(HOOK_EVENT)?.as_array().cloned()).is_some_and(|groups| {
         groups.iter().any(|group| group.get("hooks").and_then(Value::as_array).is_some_and(|items| items.iter().any(is_owned)))
@@ -628,6 +686,24 @@ not json
         assert_eq!(value["hooks"], json!({ "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "other" }] }], "Stop": [] }));
         assert!(!is_installed(&path));
         assert_eq!(uninstall(&path).unwrap()["status"], "not-installed");
+    }
+
+    #[test]
+    fn the_mod_is_written_and_named_once_in_the_plugin_folders() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let folder = directory.path().join("mod");
+        fs::write(&path, r#"{"env":{"CLAUDE_CODE_PLUGIN_DIRS":"/other"},"model":"opus"}"#).unwrap();
+        assert_eq!(install_mod(&path, &folder).unwrap()["status"], "installed");
+        assert_eq!(install_mod(&path, &folder).unwrap()["status"], "already-installed");
+        assert!(folder.join("hooks/register.tsx").is_file() && folder.join(".claude-plugin/plugin.json").is_file());
+        let value: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(value["env"][PLUGIN_DIRS], format!("/other:{}", folder.display()));
+        assert!(uninstall_mod(&path, &folder, true).unwrap());
+        let value: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(value, json!({ "env": { "CLAUDE_CODE_PLUGIN_DIRS": "/other" }, "model": "opus" }));
+        assert!(!folder.exists());
+        assert!(!uninstall_mod(&path, &folder, true).unwrap());
     }
 
     #[test]

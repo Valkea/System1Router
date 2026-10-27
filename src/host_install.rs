@@ -104,6 +104,7 @@ pub fn install_claude_code(scope: OpenCodeScope, project_dir: Option<&Path>, exe
     let path = crate::claude_code::settings_path(scope == OpenCodeScope::Global, &project_directory(project_dir)?);
     let mut result = crate::claude_code::install(&path, &executable.map(str::to_owned).unwrap_or_else(default_executable))?;
     result["scope"] = json!(scope.as_str());
+    if let Some(folder) = crate::claude_code::mod_directory() { result["mod"] = crate::claude_code::install_mod(&path, &folder)?; }
     Ok(result)
 }
 
@@ -111,6 +112,7 @@ pub fn uninstall_claude_code(scope: OpenCodeScope, project_dir: Option<&Path>) -
     let path = crate::claude_code::settings_path(scope == OpenCodeScope::Global, &project_directory(project_dir)?);
     let mut result = crate::claude_code::uninstall(&path)?;
     result["scope"] = json!(scope.as_str());
+    if let Some(folder) = crate::claude_code::mod_directory() { if crate::claude_code::uninstall_mod(&path, &folder, scope == OpenCodeScope::Global)? { result["status"] = json!("uninstalled"); } }
     Ok(result)
 }
 
@@ -420,7 +422,7 @@ fn write_json(path: &Path, value: &Value) -> Result<(), String> { if let Some(pa
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test] fn the_effort_swap_needs_no_rules() { let mut config = Config::default(); let problems = |config: &Config| doctor(config)["problems"].to_string(); assert!(problems(&config).contains("no routing rules")); config.routing.swap = crate::config::Swap::Effort; assert!(!problems(&config).contains("no routing rules") && !problems(&config).contains("no rule applies")); assert_eq!(doctor(&config)["config"]["swap"], "effort"); }
+    #[test] fn the_effort_swap_needs_no_rules() { let mut config = Config::default(); let problems = |config: &Config| doctor(config)["problems"].to_string(); config.routing.swap = crate::config::Swap::Model; assert!(problems(&config).contains("no routing rules")); config.routing.swap = crate::config::Swap::Effort; assert!(!problems(&config).contains("no routing rules") && !problems(&config).contains("no rule applies")); assert_eq!(doctor(&config)["config"]["swap"], "effort"); }
     #[test] fn installation_is_idempotent_and_preserves_fields() { let directory = tempfile::tempdir().unwrap(); let path = directory.path().join("settings.json"); fs::write(&path, r#"{"other":true}"#).unwrap(); install(Host::ClaudeCode, Some(&path), Some("system1router")).unwrap(); install(Host::ClaudeCode, Some(&path), Some("system1router")).unwrap(); let value: Value = serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap(); assert_eq!(value["other"], true); assert_eq!(value["hooks"]["UserPromptSubmit"].as_array().unwrap().len(), 1); assert!(!value.to_string().contains(OWNER_KEY)); }
 
     #[test]

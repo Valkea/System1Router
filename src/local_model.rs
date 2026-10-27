@@ -28,13 +28,18 @@ pub fn socket_path() -> Option<PathBuf> {
 
 pub fn installed(local: &LocalConfig) -> bool { model_directory(local).is_some_and(|dir| ["model.onnx", "tokenizer.json", "model.json"].iter().all(|file| dir.join(file).is_file())) }
 
+/// The repository's `models/` folder; GitHub serves its Git LFS files from here.
+pub const MODELS_URL: &str = "https://github.com/Valkea/System1Router/raw/main/models";
+
 /// Fetches `<name>.json`, `<name>.onnx` and `<name>.tokenizer.json` from `from`: a
 /// URL or a local folder. Without one, from `providers.local.url`, then from the
-/// `models/` folder (Git LFS) of the checkout the binary was built from.
+/// `models/` folder (Git LFS) of the checkout the binary was built from, then
+/// from that folder on GitHub.
 pub fn install(local: &LocalConfig, from: Option<&str>) -> Result<PathBuf, String> {
     let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).join("models");
-    let bundled = checkout.join(format!("{}.json", local.model)).is_file().then(|| checkout.to_string_lossy().into_owned());
-    let source = from.map(str::to_owned).or_else(|| local.url.clone()).or(bundled).ok_or("no model source: set providers.local.url or pass --from")?;
+    // A clone without Git LFS holds pointers, not the weights: download those instead.
+    let bundled = fs::metadata(checkout.join(format!("{}.onnx", local.model))).is_ok_and(|file| file.len() > 1 << 20).then(|| checkout.to_string_lossy().into_owned());
+    let source = from.map(str::to_owned).or_else(|| local.url.clone()).or(bundled).unwrap_or_else(|| MODELS_URL.into());
     let dir = model_directory(local).ok_or("no data directory (HOME is not set)")?;
     fs::create_dir_all(&dir).map_err(|error| format!("create {}: {error}", dir.display()))?;
     let name = &local.model;
@@ -321,6 +326,5 @@ mod tests {
         let dir = installed_to.unwrap();
         assert_eq!(fs::read(dir.join("model.onnx")).unwrap(), b"onnx");
         assert!(dir.join("tokenizer.json").is_file() && dir.join("model.json").is_file());
-        assert!(install(&LocalConfig { url: None, ..local }, None).is_err_and(|error| error.contains("no model source")));
     }
 }

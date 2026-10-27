@@ -147,8 +147,10 @@ fn print_install_help() {
     println!("Usage: system1router install [--host opencode|claude-code|all] [--scope project|global] [--project-dir PATH] [--executable PATH]");
     println!("\nDetects the installed coding assistants and installs System1Router for them:");
     println!("  OpenCode     server + TUI plugins (per-request model switch with a confirmation dialog)");
-    println!("  Claude Code  UserPromptSubmit hook in settings.json (project: .claude/settings.local.json);");
-    println!("               advisory: shows the suggested model and the /model command");
+    println!("  Claude Code  the System1Router mod (sets each turn's effort, with a dialog) in");
+    println!("               ~/.local/share/system1router/claude-code-mod, named in settings.json's");
+    println!("               env.CLAUDE_CODE_PLUGIN_DIRS, and the /s1router_* commands hook");
+    println!("               (project: .claude/settings.local.json)");
     println!("\nWithout --host, a menu lists detected assistants; without --scope, a menu asks for project or global.");
 }
 
@@ -263,6 +265,14 @@ fn command_opencode_install(args: &[String]) {
         }
     }
     report_installs(&results);
+    // The local model is the default classifier: fetch it now rather than on the first prompt.
+    if let Ok(config) = Config::load(argument(args, "--config").map(Path::new)) {
+        let local = &config.providers.local;
+        if config.providers.selected == "local" && !local_model::installed(local) {
+            println!("\nDownloading the {} model (130 MB)...", local.model);
+            match local_model::install(local, None) { Ok(dir) => println!("✓ model: {}", dir.display()), Err(error) => { failed = true; println!("✗ model: {error}"); } }
+        }
+    }
     if failed { std::process::exit(EXIT_STARTUP_FAILURE); }
 }
 
@@ -279,11 +289,12 @@ fn report_installs(results: &[Value]) {
             Some(error) => println!("✗ {host}: {error}"),
             None => println!("✓ {host}: {status} {target}"),
         }
+        if let Some(folder) = result.pointer("/mod/folder").and_then(Value::as_str) { println!("  mod {} {folder}", result.pointer("/mod/status").and_then(Value::as_str).unwrap_or("installed")); }
         if let Some(warning) = result.get("warning").and_then(Value::as_str) { println!("  ! {warning}"); }
     }
     println!("\nNext steps:");
     if results.iter().any(|result| result["host"] == "opencode") { println!("  • OpenCode: restart it; use /s1router_config to toggle routing."); }
-    if results.iter().any(|result| result["host"] == "claude-code") { println!("  • Claude Code: add rules with \"host\": \"claude-code\" (targets such as opus, sonnet, haiku); the suggestion appears above each reply."); }
+    if results.iter().any(|result| result["host"] == "claude-code") { println!("  • Claude Code: restart it; the effort of each prompt shows in the status line, /s1router opens the pane."); }
     println!("  • Run `system1router doctor` to check the provider and rules.");
 }
 
