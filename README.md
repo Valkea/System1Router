@@ -98,6 +98,16 @@ cp config.example.json ~/.config/system1router/config.json
 
 The classifier reads the prompt and its recent context and decides how hard the turn is. Pick one with `system1router provider local|jev`, or `providers.selected` in the config.
 
+| | Runs | Predicts | Exact effort on held-out sessions | Cost |
+|---|---|---|---|---|
+| **Local (Ettin)** | inside `system1router`, on your machine | the effort directly | 60% | free, no key |
+| **Laya** | a worker you provide (command or local HTTP) | one of six classes | depends on your worker | yours |
+| **Jev** | TypeSafe's hosted service | one of six classes | 54% | API key |
+
+- **Local** is the default because it needs nothing: no key, no network after the 130 MB download, no Python. It is trained for this exact task, on prompts labelled with the effort they needed, and you can retrain it on your own sessions. [Ettin-32M](https://huggingface.co/jhu-clsp/ettin-encoder-32m) was picked among small encoders because it matched mmBERT-small's accuracy at a quarter of the size (129 MB against 565 MB) and a third of the latency, under an MIT licence.
+- **Laya** is a slot for your own classifier: any program that reads the router's request and answers one of the six classes (`question_simple` … `code_hard`), which `effort.levels` turns into an effort. Use it to plug in a model in another runtime. The local model is not served this way: a class would lose its direct effort prediction, and each user would need a separate Python runtime.
+- **Jev** is TypeSafe's general System One classifier, hosted. It is not trained on effort, so its class goes through `effort.levels`; it adds a second opinion (averaging it with the local model reached 64% in [experiments/RESULTS.md](experiments/RESULTS.md)) at the cost of a key and sending the redacted prompt to TypeSafe.
+
 <details open>
 <summary><b>Local model (Ettin)</b>: default, on this machine, no key</summary>
 
