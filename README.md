@@ -33,14 +33,24 @@ Under the hood, the `system1router` executable reads one JSON event on stdin and
 
 ### 1. Get the binary: pick one
 
-| | **Prebuilt binary** (no Rust needed) | **Cargo** (builds from crates.io) |
-|---|---|---|
-| Command | `curl -fsSL https://raw.githubusercontent.com/Valkea/System1Router/main/install.sh \| sh` | `cargo install system1router` |
-| Needs | Apple Silicon macOS, or Linux x86_64/arm64 with glibc 2.38+ (Ubuntu 24.04, Debian 13, Fedora 39) | Rust 1.89+, on the same systems (ONNX Runtime has no Intel Mac or older-glibc build) |
-| Installs to | `~/.local/bin` (`SYSTEM1ROUTER_INSTALL_DIR` to change) | `~/.cargo/bin` |
-| Update | run the same command again | `system1router update` (`--check` only reports) |
+**Prebuilt binary** (no Rust needed):
 
-`install.sh` downloads the binary for your system from the [latest release](https://github.com/Valkea/System1Router/releases/latest) and checks its SHA-256 before installing it.
+```sh
+curl -fsSL https://raw.githubusercontent.com/Valkea/System1Router/main/install.sh | sh
+```
+
+**Cargo** (builds from crates.io):
+
+```sh
+cargo install system1router
+```
+
+| | Needs | Installs to | Update |
+|---|---|---|---|
+| **Prebuilt** | Apple Silicon macOS, or Linux x86_64/arm64 with glibc 2.38+ (Ubuntu 24.04, Debian 13, Fedora 39) | `~/.local/bin` | run the `curl` line again |
+| **Cargo** | Rust 1.89+, on the same systems | `~/.cargo/bin` | `system1router update` |
+
+ONNX Runtime, which runs the local model, has no Intel Mac or older-glibc build, so neither option covers those. `install.sh` downloads the binary for your system from the [latest release](https://github.com/Valkea/System1Router/releases/latest) and checks its SHA-256 before installing it; `SYSTEM1ROUTER_INSTALL_DIR` changes the folder.
 
 ### 2. Set it up
 
