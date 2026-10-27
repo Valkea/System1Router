@@ -74,6 +74,31 @@ cargo install --path . --locked
 
 For a checkout without installing, use `cargo run --` in place of `system1router`.
 
+### Uninstall
+
+First remove it from the assistants, while the binary is still there (use `--scope project` inside each project you installed it for alone):
+
+```sh
+system1router uninstall --host claude-code --scope global
+system1router uninstall --host opencode --scope global
+system1router model stop
+```
+
+This removes only what the installer added: the mod and its entry in `~/.claude/settings.json`, the slash-command hooks and files, and the OpenCode plugins. Then remove the binary the way it came:
+
+```sh
+rm ~/.local/bin/system1router   # prebuilt binary
+cargo uninstall system1router   # Cargo, or a source install
+```
+
+Your settings (with any provider keys in `.env`), the downloaded model and the decision logs stay behind. To delete them too:
+
+```sh
+rm -rf ~/.config/system1router ~/.local/share/system1router ~/.local/state/system1router
+```
+
+Restart Claude Code and OpenCode afterwards.
+
 The earlier model-switching router lives on the `model-routing` branch.
 
 ## Configure
