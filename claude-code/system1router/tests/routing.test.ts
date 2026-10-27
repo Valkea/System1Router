@@ -43,11 +43,14 @@ type Fake = {
   panes: string[]
   /** Prompt texts as the engine received them. */
   submitted: string[]
+  /** Dialog questions and status lines the mod showed. */
+  questions: string[]
+  statuses: string[]
 }
 
 /** The engine beneath the mod: the binary, the session, the dialog and the turn. */
 function engine(on: On, decision: object, answer?: string): Fake {
-  const state: Fake = { decision, panel: PANEL, now: 1_000, answer, calls: [], stdin: [], sent: { model: '', effort: undefined }, tried: [], unknown: [], toasts: [], env: undefined, panes: [], submitted: [] }
+  const state: Fake = { decision, panel: PANEL, now: 1_000, answer, calls: [], stdin: [], sent: { model: '', effort: undefined }, tried: [], unknown: [], toasts: [], env: undefined, panes: [], submitted: [], questions: [], statuses: [] }
   on('process.run', ($, e) => {
     state.calls.push([...e.argv.slice(1)])
     if (e.init?.stdin) state.stdin.push(e.init.stdin)
@@ -61,7 +64,10 @@ function engine(on: On, decision: object, answer?: string): Fake {
   on('session.surfaces', () => ({ value: ['terminal'] }))
   on('clock.now', () => ({ value: state.now }))
   on('turn.complete', ($, e) => ({ text: e.answer }))
-  on('ui.status', () => ({ value: undefined }))
+  on('ui.status', ($, e) => {
+    state.statuses.push(e.text)
+    return { value: undefined }
+  })
   on('env.set', ($, e) => {
     state.env = e.value
     return { value: undefined }
@@ -82,6 +88,7 @@ function engine(on: On, decision: object, answer?: string): Fake {
   on('tool.call', { tool: 'AskUserQuestion' }, ($, e) => {
     if (state.answer === undefined) return { deny: 'dismissed' }
     const question = e.questions[0]?.question ?? ''
+    state.questions.push(question)
     return { result: { questions: e.questions, answers: { [question]: state.answer } } }
   })
   on('prompt.submit', ($, e) => {
@@ -234,6 +241,14 @@ test('an accepted effort keeps the model and holds for the following turns', asy
   // Subagents keep their own effort.
   for await (const _ of $.turn.step({ turnId: 'turn-2', index: 1, model: 'claude-sonnet-5-5', effort: 'medium', messageCount: 3, agentId: 'agent-1' })) { /* drain */ }
   expect(state.sent.effort).toBe('medium')
+})
+
+test("the local model's decision shows its effort, not a stand-in class", async ($, on) => {
+  const state = engine(on, { ...EFFORT, classifier: 'Ettin', effortOnly: true, routingClass: 'question_moderate' }, 'Use xhigh effort')
+  expect(await turn($, state)).toEqual({ model: 'claude-sonnet-5-5', effort: 'xhigh' })
+  expect(state.questions.at(-1)).toStartWith('S1R/Ettin (80%)')
+  expect(state.statuses.at(-1)).toBe('S1R/Ettin → xhigh effort')
+  expect([...state.questions, ...state.statuses].join(' ')).not.toContain('question_moderate')
 })
 
 test('keeping the effort asks with the effort wording and changes nothing', async ($, on) => {

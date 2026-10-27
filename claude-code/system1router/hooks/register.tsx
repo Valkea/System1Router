@@ -44,6 +44,8 @@ type Decision = {
   routingClass?: string
   /** The classifier's family, from the model that answered: `Jev`, `Ettin`. */
   classifier?: string
+  /** The local model predicts the effort itself: `routingClass` is a stand-in, not shown. */
+  effortOnly?: boolean
   confidence?: number
   reason?: string
   code?: string
@@ -94,14 +96,24 @@ function source(decision: Decision): string {
   return decision.classifier ? `S1R/${decision.classifier}` : 'S1R'
 }
 
+/** The class to show, empty when the classifier predicts the effort directly. */
+function shown(decision: Decision): string {
+  return decision.effortOnly ? '' : decision.routingClass ?? 'unknown'
+}
+
+/** `S1R/Jev · code_hard`, or `S1R/Ettin` alone. */
+function tag(decision: Decision): string {
+  return decision.effortOnly ? source(decision) : `${source(decision)} · ${decision.routingClass}`
+}
+
 function idle(decision: Decision): string {
   if (decision.code === 'disabled') return 'S1R off'
   if (decision.routingClass && (decision.code === 'effort_unchanged' || (decision.code === 'cache_sticky' && decision.effort))) {
     const now = `${decision.currentEffort ?? 'session'} effort`
-    return `${source(decision)} · ${decision.routingClass} · ${now}${decision.code === 'cache_sticky' ? ` kept for the cache (not ${decision.effort})` : ''}`
+    return `${tag(decision)} · ${now}${decision.code === 'cache_sticky' ? ` kept for the cache (not ${decision.effort})` : ''}`
   }
   const current = decision.current ? short(decision.current) : 'current model'
-  if (decision.routingClass) return `${source(decision)} · ${decision.routingClass}${decision.code === 'cache_sticky' ? ' · cache kept' : ''} · ${current}`
+  if (decision.routingClass) return `${tag(decision)}${decision.code === 'cache_sticky' ? ' · cache kept' : ''} · ${current}`
   return 'S1R on'
 }
 
@@ -262,7 +274,7 @@ async function settle($: EngineInterface, decision: Decision): Promise<Choice | 
       const percent = Math.round((decision.confidence ?? 0) * 100)
       const reason = (decision.reason ?? '').replace(/\.\s*$/, '')
       try {
-        const answer = await $.ui.ask(`${source(decision)} · ${decision.routingClass} (${percent}%)${reason ? `: ${reason}` : ''}. Which effort for this turn?`, { header: 'S1R effort', options: labels })
+        const answer = await $.ui.ask(`${tag(decision)} (${percent}%)${reason ? `: ${reason}` : ''}. Which effort for this turn?`, { header: 'S1R effort', options: labels })
         picked = asEffort(answer.trim().split(/\s+/)[0]?.toLowerCase())
         how = 'asked'
       } catch {
@@ -279,7 +291,7 @@ async function settle($: EngineInterface, decision: Decision): Promise<Choice | 
       ? `Think at ${effort} effort instead of ${from ?? "the session's"}? Same model and prompt cache.`
       : `Use ${target} for this turn instead of ${short(current)}?`
     try {
-      const answer = await $.ui.ask(`${source(decision)} · ${decision.routingClass} (${percent}%)${reason ? `: ${reason}` : ''}. ${question}`, { header: 'S1R', options: labels })
+      const answer = await $.ui.ask(`${tag(decision)} (${percent}%)${reason ? `: ${reason}` : ''}. ${question}`, { header: 'S1R', options: labels })
       accept = answer === labels[0] || answer === labels[2]
       remember = answer === labels[2] || answer === labels[3]
       how = 'asked'
@@ -299,14 +311,14 @@ async function settle($: EngineInterface, decision: Decision): Promise<Choice | 
   }
   if (chosen) {
     await run($, ['override', '--session', await $.session.id(), '--model', current, '--effort', chosen, ...(effort ? ['--from', effort] : []), ...(decision.correlationId ? ['--correlation', decision.correlationId] : [])])
-    await update($, routed, list => [...list, { kind: 'effort' as const, routingClass: decision.routingClass ?? 'unknown', confidence: decision.confidence ?? 0, current, model, effort: chosen, from, outcome: 'switched' as const, how: 'picked' as const }].slice(-HISTORY))
+    await update($, routed, list => [...list, { kind: 'effort' as const, routingClass: shown(decision), confidence: decision.confidence ?? 0, current, model, effort: chosen, from, outcome: 'switched' as const, how: 'picked' as const }].slice(-HISTORY))
     await update($, effortState, s => ({ ...s, applied: chosen }))
-    $.ui.status(`${source(decision)} · ${decision.routingClass} → ${chosen} effort (your pick, not ${effort})`)
+    $.ui.status(`${tag(decision)} → ${chosen} effort (your pick, not ${effort})`)
     return undefined
   }
-  const entry: Routed = { kind: isEffort ? 'effort' : 'model', routingClass: decision.routingClass ?? 'unknown', confidence: decision.confidence ?? 0, current, model, effort, from, outcome: accept ? 'switched' : 'kept', how }
+  const entry: Routed = { kind: isEffort ? 'effort' : 'model', routingClass: shown(decision), confidence: decision.confidence ?? 0, current, model, effort, from, outcome: accept ? 'switched' : 'kept', how }
   await update($, routed, list => [...list, entry].slice(-HISTORY))
-  $.ui.status(accept ? `${source(decision)} · ${entry.routingClass} → ${target}` : `${source(decision)} · ${entry.routingClass} · kept ${isEffort ? `${was} effort` : short(current)}`)
+  $.ui.status(accept ? `${tag(decision)} → ${target}` : `${tag(decision)} · kept ${isEffort ? `${was} effort` : short(current)}`)
   if (isEffort) {
     // Held for the following turns too, until the router picks another.
     if (accept) await update($, effortState, s => ({ ...s, applied: effort }))
@@ -580,8 +592,8 @@ export const register: Register = (on, options) => {
               {'  '}
               <Text color={item.outcome === 'switched' ? 'green' : undefined}>{item.outcome === 'switched' ? '→' : '·'}</Text>
               {item.kind === 'effort'
-                ? ` ${item.routingClass} ${Math.round(item.confidence * 100)}%  effort ${item.from ?? 'session'} → ${item.effort}  `
-                : ` ${item.routingClass} ${Math.round(item.confidence * 100)}%  ${short(item.current)} → ${item.model}${item.effort ? ` · ${item.effort}` : ''}  `}
+                ? `${item.routingClass ? ` ${item.routingClass}` : ''} ${Math.round(item.confidence * 100)}%  effort ${item.from ?? 'session'} → ${item.effort}  `
+                : `${item.routingClass ? ` ${item.routingClass}` : ''} ${Math.round(item.confidence * 100)}%  ${short(item.current)} → ${item.model}${item.effort ? ` · ${item.effort}` : ''}  `}
               <Text dimColor>{item.outcome} ({item.how})</Text>
             </Text>
           ))}

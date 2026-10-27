@@ -15,8 +15,9 @@ Coding assistants run every turn at one effort level. Set it high and "rename th
 System1Router reads each prompt with the recent conversation (files in play, tools used, the last exchanges), so a short "ok, do it" after a long debugging session is still seen as hard. It predicts the effort the turn needs, `low` to `max`, and applies it before the prompt is sent:
 
 ```
-you:  fix the typo in the README title          → S1R/Ettin · code_simple → low
-you:  the cache test is flaky under load, why?  → S1R/Ettin · code_hard   → xhigh
+you:  fix the typo in the README title          → S1R/Ettin → low
+you:  the cache test is flaky under load, why?  → S1R/Ettin → xhigh
+you:  ok, do it                                 → S1R/Ettin → high   (the fix it refers to)
 ```
 
 - **Keeps your model and its prompt cache.** Only the effort changes, so the cached conversation is reused; switching models would throw it away.
@@ -153,8 +154,8 @@ Use `endpoint` when TypeSafe gives you an exact System One endpoint, or `baseUrl
 
 `system1router install` lists the detected assistants and asks which to install for, then **This project only** or **All projects for this user**. For scripts: `--host opencode|claude-code|all` and `--scope project|global`. `system1router uninstall --host <host> --scope <scope>` removes only what the installer created. Restart the assistant afterwards.
 
-- **Claude Code**: the System1Router mod, written to `~/.local/share/system1router/claude-code-mod` and named in `env.CLAUDE_CODE_PLUGIN_DIRS` of the settings. Before each prompt is sent it sets the turn's effort, after a native dialog if `consent` asks for one, and shows the decision in the status line (`S1R/Ettin · code_hard → xhigh`). `/s1router` opens a pane with the state and recent decisions; `/s1router_consent` chooses how an effort is confirmed. Open a prompt with `[low]` … `[max]` to choose its effort yourself; pressing Esc and resending with a tag records a correction. A `UserPromptSubmit` hook adds `/s1router_toggle`, `/s1router_config` and `/s1router_stats`, which run without a model turn. Details: [docs/CLIENTS.md](docs/CLIENTS.md#claude-code-mod).
-- **OpenCode**: server and TUI plugins under `.opencode/` or `~/.config/opencode/`. The effort becomes the model's nearest variant for that request. `/s1router_config` opens a menu to toggle routing, switch the classifier, show traces and copy the config path; `/s1router_stats` shows counts and acceptance. Each prompt starts with a compact `S1R/Ettin / class` block, excluded from model context.
+- **Claude Code**: the System1Router mod, written to `~/.local/share/system1router/claude-code-mod` and named in `env.CLAUDE_CODE_PLUGIN_DIRS` of the settings. Before each prompt is sent it sets the turn's effort, after a native dialog if `consent` asks for one, and shows the decision in the status line (`S1R/Ettin → xhigh`; with Jev, its class too: `S1R/Jev · code_hard → xhigh`). `/s1router` opens a pane with the state and recent decisions; `/s1router_consent` chooses how an effort is confirmed. Open a prompt with `[low]` … `[max]` to choose its effort yourself; pressing Esc and resending with a tag records a correction. A `UserPromptSubmit` hook adds `/s1router_toggle`, `/s1router_config` and `/s1router_stats`, which run without a model turn. Details: [docs/CLIENTS.md](docs/CLIENTS.md#claude-code-mod).
+- **OpenCode**: server and TUI plugins under `.opencode/` or `~/.config/opencode/`. The effort becomes the model's nearest variant for that request. `/s1router_config` opens a menu to toggle routing, switch the classifier, show traces and copy the config path; `/s1router_stats` shows counts and acceptance. Each prompt starts with a compact `S1R/Ettin` block (Jev adds its class), excluded from model context.
 
 What the classifier sees: the current prompt plus recent conversation, tool use and file references, redacted and bounded by `redaction.maxContextChars` (4,000 characters). Provider exchanges are logged locally in `~/.local/state/system1router/provider-debug.jsonl`, usage stats in `usage.jsonl`.
 

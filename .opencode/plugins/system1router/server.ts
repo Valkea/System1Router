@@ -8,7 +8,7 @@ import { consentDirectory, consentTimeoutMs, recordUsage, rememberedChoice, rout
 type RouterResult = {
   consent?: string;
   providerTrace?: string;
-  telemetry?: { routingClass?: string; providerModel?: string };
+  telemetry?: { routingClass?: string; providerModel?: string; provider?: string };
   diagnostic?: { code?: string };
   recommendation?: {
     provider?: string;
@@ -558,7 +558,8 @@ export const System1RouterServer: Plugin = async ({ client, directory }) => {
       }
 
       const recommendation = result.recommendation;
-      const routingClass = recommendation?.routingClass ?? result.telemetry?.routingClass;
+      // The local model predicts the effort itself: its class is a stand-in, not shown.
+      const routingClass = result.telemetry?.provider === "local" ? undefined : recommendation?.routingClass ?? result.telemetry?.routingClass;
       const classifier = classifierFamily(result.telemetry?.providerModel);
       if (!recommendation?.provider || !recommendation.model) {
         appendVerboseDetails();

@@ -299,6 +299,8 @@ pub fn mod_decision(decision: &NormalizedDecision, event: &NormalizedEvent, tabl
     // A class that changes nothing (same effort, a warm cache) is still shown.
     if let Some(class) = decision.telemetry.as_ref().and_then(|telemetry| telemetry.routing_class.as_ref()) { output["routingClass"] = json!(class); }
     if let Some(model) = decision.telemetry.as_ref().and_then(|telemetry| telemetry.provider_model.as_deref()) { output["classifier"] = json!(crate::control::classifier_family(model)); }
+    // The local model predicts the effort itself: its class is a stand-in, not shown.
+    if decision.telemetry.as_ref().and_then(|telemetry| telemetry.provider.as_deref()) == Some("local") { output["effortOnly"] = json!(true); }
     if let Some(effort) = decision.diagnostic.details.get("suggestedEffort") { output["effort"] = effort.clone(); }
     let Some(recommendation) = decision.recommendation.as_ref().filter(|_| decision.outcome != DecisionOutcome::Block) else { return output; };
     let Some(model) = recommendation.model.as_deref() else { return output; };
@@ -787,12 +789,15 @@ not json
         let mut sticky = decision(DecisionOutcome::Allow, None);
         sticky.diagnostic = Diagnostic::info("cache_sticky", "keeping high effort reuses 80000 cached context tokens");
         sticky.diagnostic.details = json!({ "effort": "high", "suggestedEffort": "low" });
-        sticky.telemetry = Some(crate::protocol::RoutingEvent { correlation_id: "c".into(), host: "claude-code".into(), routing_class: Some(RoutingClass::CodeSimple), task_type: None, mode: RoutingMode::Advisory, policy_outcome: "cache-sticky".into(), latency_ms: 0, error_category: None, model: None, suggested_model: None, accepted: None, effort: None, probabilities: None, provider_model: None, capture: None, debug_capture: None });
+        sticky.telemetry = Some(crate::protocol::RoutingEvent { correlation_id: "c".into(), host: "claude-code".into(), routing_class: Some(RoutingClass::CodeSimple), task_type: None, mode: RoutingMode::Advisory, policy_outcome: "cache-sticky".into(), latency_ms: 0, error_category: None, model: None, suggested_model: None, accepted: None, effort: None, probabilities: None, provider_model: None, provider: None, capture: None, debug_capture: None });
         let held = mod_decision(&sticky, &event, None, none);
         assert_eq!((held["action"].as_str(), held["code"].as_str(), held["routingClass"].as_str(), held["effort"].as_str()), (Some("none"), Some("cache_sticky"), Some("code_simple"), Some("low")));
         assert!(held.get("classifier").is_none(), "no model answered");
         if let Some(telemetry) = sticky.telemetry.as_mut() { telemetry.provider_model = Some("ettin-32m-effort-v1".into()); }
         assert_eq!(mod_decision(&sticky, &event, None, none)["classifier"], "Ettin", "the mod shows which classifier decided");
+        assert!(mod_decision(&sticky, &event, None, none).get("effortOnly").is_none(), "Jev's class is its own");
+        if let Some(telemetry) = sticky.telemetry.as_mut() { telemetry.provider = Some("local".into()); }
+        assert_eq!(mod_decision(&sticky, &event, None, none)["effortOnly"], true, "the local model's class is a stand-in");
     }
 
     #[test]

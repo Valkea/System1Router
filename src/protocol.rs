@@ -403,6 +403,10 @@ pub struct RoutingEvent {
     pub probabilities: Option<std::collections::BTreeMap<String, f32>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_model: Option<String>,
+    /// The classifier that answered: `jev`, `laya`, `local`. The local model
+    /// predicts an effort; its class is only the one `effort.levels` maps to it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
     /// The redacted request and context the provider saw
     /// (`telemetry.capturePrompts`), to label decisions afterwards.
     #[serde(default, skip_serializing_if = "Option::is_none")]
