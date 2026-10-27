@@ -44,7 +44,7 @@ pub fn set_consent(path: &Path, style: Option<&str>, ask_below: Option<Option<f3
     }
     if !values.is_empty() { set_config(path, "consent", &values)?; }
     let mode = read_config_value(path, "consent", "mode")?.and_then(|value| value.as_str().map(str::to_owned)).unwrap_or_else(|| "interactive".into());
-    let style = read_config_value(path, "consent", "style")?.and_then(|value| value.as_str().map(str::to_owned)).unwrap_or_else(|| "confirm".into());
+    let style = read_config_value(path, "consent", "style")?.and_then(|value| value.as_str().map(str::to_owned)).unwrap_or_else(|| "menu".into());
     let below = read_config_value(path, "consent", "askBelow")?.and_then(|value| value.as_f64());
     Ok(match mode.as_str() {
         "always-accept" => "consent auto: suggestions apply without asking".into(),

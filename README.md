@@ -62,7 +62,7 @@ system1router toggle on
 Then restart Claude Code and OpenCode. The status line shows `S1R on · Ettin`, and each prompt shows the effort it was given.
 
 - `system1router install` asks which assistants and which scope (all projects or this one), then downloads the model into `~/.local/share/system1router/models/`. In Claude Code it installs the mod into `~/.local/share/system1router/claude-code-mod` and names it in `env.CLAUDE_CODE_PLUGIN_DIRS` of `~/.claude/settings.json`.
-- `system1router toggle on` writes `~/.config/system1router/config.json` if it does not exist. Defaults: effort routing, local model, ask before changing the effort. `system1router consent auto|confirm|menu` changes how a new effort is confirmed; `system1router doctor` checks the setup.
+- `system1router toggle on` writes `~/.config/system1router/config.json` if it does not exist. Defaults: effort routing, local model, a menu to pick the effort on every prompt. `system1router consent auto|confirm|menu` changes how a new effort is confirmed; `system1router doctor` checks the setup.
 
 ### From source
 
@@ -88,7 +88,7 @@ cp config.example.json ~/.config/system1router/config.json
 | Command | What |
 |---|---|
 | `system1router toggle [on\|off]` | Routing on or off (`/s1router_toggle` in both assistants) |
-| `system1router consent auto\|confirm\|menu` | Apply each effort, confirm it (yes/no), or pick it from a menu (`/s1router_consent` in Claude Code) |
+| `system1router consent auto\|confirm\|menu` | Apply each effort, confirm it (yes/no), or pick it from a menu (default; `/s1router_consent` in Claude Code) |
 | `system1router provider local\|jev` | Which classifier decides (Laya: set `providers.selected` in the config) |
 | `system1router status`, `stats`, `doctor` | State, effort counts and acceptance, setup problems |
 

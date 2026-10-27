@@ -157,9 +157,9 @@ pub struct ConsentConfig {
 #[serde(rename_all = "kebab-case")]
 pub enum ConsentStyle {
     /// Use or keep the suggestion, or remember the answer for the pair.
-    #[default]
     Confirm,
     /// Pick the effort: the suggested one first, any other typed under Other.
+    #[default]
     Menu,
 }
 
@@ -590,6 +590,7 @@ mod tests {
         let unknown: Config = serde_json::from_str(r#"{"effort":{"levels":{"code_huge":"max"}}}"#).unwrap();
         assert!(unknown.validate().is_err());
         assert_eq!(Config::default().routing.swap, Swap::Effort);
+        assert_eq!(Config::default().consent.style, ConsentStyle::Menu);
     }
 
     #[test]

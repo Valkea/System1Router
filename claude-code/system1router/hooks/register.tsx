@@ -274,7 +274,7 @@ async function settle($: EngineInterface, decision: Decision): Promise<Choice | 
       const percent = Math.round((decision.confidence ?? 0) * 100)
       const reason = (decision.reason ?? '').replace(/\.\s*$/, '')
       try {
-        const answer = await $.ui.ask(`${tag(decision)} (${percent}%)${reason ? `: ${reason}` : ''}. Which effort for this turn?`, { header: 'S1R effort', options: labels })
+        const answer = await $.ui.ask(`${tag(decision)} (${percent}%)${reason ? `: ${reason}` : ''}. Which effort for this turn? (Change how S1R asks: /s1router_consent confirm, auto or ask-below 80%.)`, { header: 'S1R effort', options: labels })
         picked = asEffort(answer.trim().split(/\s+/)[0]?.toLowerCase())
         how = 'asked'
       } catch {

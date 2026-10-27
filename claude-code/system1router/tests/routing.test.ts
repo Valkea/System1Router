@@ -309,6 +309,7 @@ const MENU = { ...EFFORT, currentEffort: 'medium', style: 'menu', correlationId:
 test('the menu applies the suggested effort, another picked one, or one typed under Other', async ($, on) => {
   const state = engine(on, MENU, 'xhigh (suggested)')
   expect((await turn($, state, 'fix the race', 'turn-1')).effort).toBe('xhigh')
+  expect(state.questions.at(-1)).toContain('/s1router_consent')
 
   state.answer = 'high'
   expect((await turn($, state, 'fix the race', 'turn-2')).effort).toBe('high')
