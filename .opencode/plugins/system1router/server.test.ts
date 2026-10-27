@@ -22,7 +22,7 @@ test("routes the same turn and counts actual acceptances, declines and missing U
       providerMetadata: { provider: "jev", version: "test" }, correlationId: "fixture",
     });
     await fs.writeFile(process.env.SYSTEM1ROUTER_CONFIG, JSON.stringify({
-      routing: { enabled: true }, prices: { enabled: false }, timeouts: { consentMs: 500 }, providers: { selected: "jev", jev: { endpoint: "http://localhost", credentialEnv: null } },
+      routing: { enabled: true, swap: "model" }, prices: { enabled: false }, timeouts: { consentMs: 500 }, providers: { selected: "jev", jev: { endpoint: "http://localhost", credentialEnv: null } },
       rules: [{ id: "simple", routingClass: "code_simple", target: { provider: "p", model: "suggested", variant: "high" }, reason: "Small change" }],
     }));
     await fs.mkdir(consentDirectory(), { recursive: true });

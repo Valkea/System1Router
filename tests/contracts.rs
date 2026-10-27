@@ -25,6 +25,7 @@ fn host_translators_normalize_and_drop_unsupported_switches() {
 fn policy_and_runtime_preserve_declined_request() {
     let mut config = Config::default();
     config.routing.enabled = true;
+    config.routing.swap = system1router_core::config::Swap::Model;
     config.consent.mode = system1router_core::config::ConsentMode::AlwaysDecline;
     config.rules.push(PolicyRule { id: "simple".into(), priority: 0, routing_class: Some(RoutingClass::CodeSimple), task_types: vec![], host: None, project_id: None, session_id: None, min_confidence: None, mode: Some(RoutingMode::Advisory), predicate: None, target: PolicyTarget { provider: Some("p".into()), model: Some("m".into()), variant: None, gateway_target: None }, reason: Some("fixture".into()) });
     let mut event = normalize(Host::Generic, json!({ "prompt": "small change", "sessionId": "s", "model": "current", "provider": "p" }), None);

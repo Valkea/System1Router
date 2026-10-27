@@ -19,9 +19,10 @@ fn run_with(arguments: &[&str], stdin: &str, state: &Path, mod_session: Option<&
     serde_json::from_slice(&output.stdout).unwrap()
 }
 
+// The model swap, where the hook holds prompts; the effort swap is the default.
 fn config(directory: &Path, enabled: bool) -> String {
     let path = directory.join("config.json");
-    std::fs::write(&path, format!(r#"{{"routing":{{"enabled":{enabled}}}}}"#)).unwrap();
+    std::fs::write(&path, format!(r#"{{"routing":{{"enabled":{enabled},"swap":"model"}}}}"#)).unwrap();
     path.to_str().unwrap().to_owned()
 }
 
