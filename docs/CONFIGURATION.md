@@ -23,7 +23,7 @@ Minimal advisory configuration:
 }
 ```
 
-The default (`routing.enabled: false`) is a safety state, not a working routing policy. The installed OpenCode plugin remains loaded and records redacted diagnostics, but it will not classify or recommend models until a provider is selected, a policy rule is present, and routing is enabled. The plugin shows a one-time notification for this state.
+The default (`routing.enabled: false`) is a safety state: the installed plugins stay loaded and record redacted diagnostics, but nothing is classified until routing is enabled (`system1router toggle on`). With everything else left at its defaults, routing then sets the effort (`routing.swap: "effort"`) with the local model (`providers.selected: "local"`); the model swap also needs a provider and a policy rule. The plugin shows a one-time notification for this state.
 
 Rules are evaluated by ascending `priority`, then configuration order. A rule can match routing class, task type, host, project/session scope, minimum confidence, and `branch=...`, `repository=...`, or `cwd=...` predicates. Targets are checked against the host model catalog. If a matching model is missing from the catalog, the router keeps the current model and reports why. Configure rules for the classes you want to route; an optional `defaultRecommendation` with a target catches classes without a specific rule. Targets must use the exact provider and model IDs exposed by the host. The `reason` on each rule or default recommendation controls the explanation shown to the user; if omitted, the router describes the actual matching rule, class and task type. Gateway targets must be in `gateway.upstreamAllowlist`.
 
@@ -41,8 +41,8 @@ Run `system1router doctor` after editing: `problems` lists what prevents routing
 
 `routing.swap` chooses what a decision changes:
 
-- `model` (default): a matching rule switches to its target model, as described above. A different model cannot reuse the conversation's prompt cache.
-- `effort`: rules are not used. The current model stays and its reasoning effort is set to the level `effort.levels` gives the class (Claude Code `/effort`, an OpenCode variant):
+- `model`: a matching rule switches to its target model, as described above. A different model cannot reuse the conversation's prompt cache.
+- `effort` (default): rules are not used. The current model stays and its reasoning effort is set to the level `effort.levels` gives the class (Claude Code `/effort`, an OpenCode variant):
 
 ```json
 {
@@ -78,7 +78,7 @@ Provider credentials are referenced by environment variable name (`credentialEnv
 | Field | Default | Meaning |
 |---|---|---|
 | `model` | `ettin-32m-effort-v1` | The model's name; its files live in `$XDG_DATA_HOME/system1router/models/<model>/`. |
-| `url` | none | Folder holding `<model>.json`, `<model>.onnx` and `<model>.tokenizer.json`: a URL or a local folder. `system1router provider local` and `system1router model install` download from it; without it they copy from `models/` (Git LFS) in the checkout the binary was built from. |
+| `url` | none | Folder holding `<model>.json`, `<model>.onnx` and `<model>.tokenizer.json`: a URL or a local folder. `system1router provider local` and `system1router model install` download from it; without it they copy from `models/` in the checkout the binary was built from when its Git LFS files are present, or else download that folder from GitHub. |
 | `threads` | `2` | ONNX Runtime threads of the model process. |
 | `idleMinutes` | `30` | The model process exits after this long without a prompt. It also exits 30 seconds after the last assistant process that used it has ended. |
 

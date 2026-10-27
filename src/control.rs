@@ -56,7 +56,9 @@ pub fn set_consent(path: &Path, style: Option<&str>, ask_below: Option<Option<f3
 fn is_toml(path: &Path) -> bool { path.extension().and_then(|extension| extension.to_str()) == Some("toml") }
 
 fn read_config_value(path: &Path, section: &str, key: &str) -> Result<Option<Value>, String> {
-    let text = fs::read_to_string(path).map_err(|error| format!("read {}: {error}; create the config first (see README)", path.display()))?;
+    // A first command (`toggle on`, `provider local`) creates a JSON config.
+    if !path.exists() && !is_toml(path) { if let Some(parent) = path.parent() { fs::create_dir_all(parent).map_err(|error| format!("create {}: {error}", parent.display()))?; } fs::write(path, "{}\n").map_err(|error| format!("write {}: {error}", path.display()))?; }
+    let text = fs::read_to_string(path).map_err(|error| format!("read {}: {error}", path.display()))?;
     let root: Value = if is_toml(path) {
         let parsed: toml::Value = toml::from_str(&text).map_err(|error| format!("parse TOML config: {error}"))?;
         serde_json::to_value(parsed).map_err(|error| error.to_string())?
@@ -68,7 +70,9 @@ fn read_config_value(path: &Path, section: &str, key: &str) -> Result<Option<Val
 /// order; TOML is edited in place so its comments and layout survive. The
 /// file is replaced atomically.
 pub fn set_config(path: &Path, section: &str, values: &[(&str, Value)]) -> Result<(), String> {
-    let text = fs::read_to_string(path).map_err(|error| format!("read {}: {error}; create the config first (see README)", path.display()))?;
+    // A first command (`toggle on`, `provider local`) creates a JSON config.
+    if !path.exists() && !is_toml(path) { if let Some(parent) = path.parent() { fs::create_dir_all(parent).map_err(|error| format!("create {}: {error}", parent.display()))?; } fs::write(path, "{}\n").map_err(|error| format!("write {}: {error}", path.display()))?; }
+    let text = fs::read_to_string(path).map_err(|error| format!("read {}: {error}", path.display()))?;
     let updated = if is_toml(path) {
         toml::from_str::<toml::Value>(&text).map_err(|error| format!("parse TOML config: {error}"))?;
         values.iter().fold(text, |text, (key, value)| set_toml(&text, section, key, value))
@@ -358,7 +362,9 @@ mod tests {
         assert!(set_routing_enabled(&path, None).unwrap());
         let parsed: toml::Value = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(parsed["routing"]["enabled"].as_bool(), Some(true));
-        assert!(set_routing_enabled(&directory.path().join("missing.json"), None).is_err());
+        let missing = directory.path().join("new/config.json");
+        assert!(set_routing_enabled(&missing, Some(true)).unwrap());
+        assert_eq!(serde_json::from_str::<Value>(&fs::read_to_string(&missing).unwrap()).unwrap(), serde_json::json!({ "routing": { "enabled": true } }));
     }
 
     #[test]

@@ -15,7 +15,7 @@ pub struct ProviderConfig {
     pub local: LocalConfig,
 }
 
-fn default_provider() -> String { "none".into() }
+fn default_provider() -> String { "local".into() }
 
 impl Default for ProviderConfig {
     fn default() -> Self { Self { selected: default_provider(), jev: JevConfig::default(), laya: LayaConfig::default(), local: LocalConfig::default() } }
@@ -194,10 +194,10 @@ pub struct RoutingConfig {
 #[serde(rename_all = "kebab-case")]
 pub enum Swap {
     /// Switch to the model a matching rule names.
-    #[default]
     Model,
     /// Keep the model and set the effort `effort.levels` gives the class
     /// (Claude Code `/effort`, an OpenCode variant). Rules are not used.
+    #[default]
     Effort,
 }
 
@@ -589,7 +589,7 @@ mod tests {
         assert!(config.validate().is_ok());
         let unknown: Config = serde_json::from_str(r#"{"effort":{"levels":{"code_huge":"max"}}}"#).unwrap();
         assert!(unknown.validate().is_err());
-        assert_eq!(Config::default().routing.swap, Swap::Model);
+        assert_eq!(Config::default().routing.swap, Swap::Effort);
     }
 
     #[test]
