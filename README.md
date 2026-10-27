@@ -1,59 +1,58 @@
 # System1Router
 
-System1Router is a fail-open, context-aware model-routing core for AI coding clients. The native `system1router` executable accepts one normalized JSON event on stdin and emits one JSON decision on stdout. Diagnostics are written to stderr only.
+**Sets the reasoning effort of every prompt you send to Claude Code or OpenCode, automatically.**
 
-## Build
+Coding assistants run every turn at one effort level. Set it high and "rename this variable" or "yes, go ahead" burn minutes of thinking and tokens; set it low and the hard bug gets a shallow answer. Switching by hand with `/effort` (or an OpenCode variant) every prompt is tedious, so nobody does it.
 
-### Quick start: effort routing with the local model
+System1Router reads each prompt with the recent conversation (files in play, tools used, the last exchanges), so a short "ok, do it" after a long debugging session is still seen as hard. It predicts the effort the turn needs, `low` to `max`, and applies it before the prompt is sent:
 
-On a new machine (Linux or macOS), with Rust 1.78 or newer:
-
-```sh
-# 1. Git LFS first: the local model (models/, 130 MB) is stored with it
-sudo apt install git-lfs        # macOS: brew install git-lfs
-git lfs install
-
-# 2. Clone and build
-git clone https://github.com/Valkea/System1Router.git
-cd System1Router
-cargo install --path . --locked
-
-# 3. Turn routing on: effort swap, classified by the local model
-mkdir -p ~/.config/system1router
-cat > ~/.config/system1router/config.json <<'JSON'
-{
-  "routing": { "enabled": true, "swap": "effort" },
-  "providers": { "selected": "local" },
-  "consent": { "style": "menu" }
-}
-JSON
-system1router model install     # copies the model from models/ in this checkout
-
-# 4. Hook into Claude Code and OpenCode, then restart them
-system1router install
-system1router doctor
+```
+you:  fix the typo in the README title          → S1R/Ettin · code_simple → low
+you:  the cache test is flaky under load, why?  → S1R/Ettin · code_hard   → xhigh
 ```
 
-Keep the checkout where it is: the binary installs the model from its `models/` folder. If the clone was made before Git LFS was installed, run `git lfs pull` in it, then `system1router model install` again. An existing config only needs `system1router provider local`. `system1router toggle off` pauses routing; `system1router consent auto|confirm|menu` picks how a new effort is confirmed.
+- **Keeps your model and its prompt cache.** Only the effort changes, so the cached conversation is reused; switching models would throw it away.
+- **Local and private.** The classifier is a small model (Ettin, 32M parameters, 130 MB) running on your machine: about 10 ms per prompt, no API key, nothing sent anywhere. One background process serves every open session and stops when the last one closes.
+- **You stay in control.** Accept every suggestion, confirm it, or pick from a menu; open a prompt with `[high]` to force its effort (Claude Code); turn it off with `/s1router_toggle`.
+- **Fail open.** If anything goes wrong, the prompt goes through unchanged.
 
-The previous model-switching router lives on the `model-routing` branch.
+The classifier was trained on 2,500 real coding prompts labelled in hindsight with the effort they needed. On held-out sessions it picks the exact level 60% of the time and is within one level 94% of the time (always guessing `medium`: 33%). See [experiments/TRAINING.md](experiments/TRAINING.md) to retrain it on your own sessions. It can also use the hosted [Jev](#jev) classifier instead.
+
+Under the hood, the `system1router` executable reads one JSON event on stdin and writes one JSON decision on stdout; the Claude Code mod and the OpenCode plugin call it.
+
+## Install
+
+On Linux or macOS:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Valkea/System1Router/main/install.sh | sh
+system1router install      # Claude Code mod, OpenCode plugin, and the local model (130 MB)
+system1router toggle on
+```
+
+Then restart Claude Code and OpenCode. The status line shows `S1R on · Ettin`, and each prompt shows the effort it was given.
+
+- `install.sh` downloads the binary for your system from the [latest release](https://github.com/Valkea/System1Router/releases/latest), checks its SHA-256, and puts it in `~/.local/bin` (`SYSTEM1ROUTER_INSTALL_DIR` to change).
+- `system1router install` asks which assistants and which scope (all projects or this one), then downloads the model into `~/.local/share/system1router/models/`. In Claude Code it installs the mod into `~/.local/share/system1router/claude-code-mod` and names it in `env.CLAUDE_CODE_PLUGIN_DIRS` of `~/.claude/settings.json`.
+- `system1router toggle on` writes `~/.config/system1router/config.json` if it does not exist. Defaults: effort routing, local model, ask before changing the effort. `system1router consent auto|confirm|menu` changes how a new effort is confirmed; `system1router doctor` checks the setup.
+
+With Rust 1.89 or newer, `cargo install system1router` builds the same binary instead of `install.sh`.
 
 ### From source
 
-The repository currently ships source packages rather than prebuilt release archives. Install Rust 1.78 or newer, then install the executable into Cargo's binary directory:
-
 ```sh
+git clone https://github.com/Valkea/System1Router.git
+cd System1Router
 cargo install --path . --locked
-system1router --version
 ```
 
-On Windows PowerShell, use the same `cargo install` command and ensure `%USERPROFILE%\.cargo\bin` is on `PATH`. For a local checkout without installing, use `cargo run --` in place of `system1router` below.
+The model is stored with [Git LFS](https://git-lfs.com) in `models/`. With `git-lfs` installed before cloning, a binary built from the checkout installs the model from it; without it, the model is downloaded from GitHub. For a checkout without installing, use `cargo run --` in place of `system1router`.
 
-The binary supports Linux, macOS, and Windows on the Rust-supported x86_64 and aarch64 targets. Release packaging uses `cargo build --release --target <target>` and publishes the resulting `system1router` executable with the matching host adapter files.
+The earlier model-switching router lives on the `model-routing` branch.
 
 ## Configure
 
-Create a configuration file and point the executable at it:
+The config lives in `~/.config/system1router/config.json`; the commands above create and edit it. To start from the full example instead:
 
 ```sh
 mkdir -p "$HOME/.config/system1router"
@@ -61,7 +60,7 @@ cp config.example.json "$HOME/.config/system1router/config.json"
 export SYSTEM1ROUTER_CONFIG="$HOME/.config/system1router/config.json"
 ```
 
-Routing is disabled by default. Set `routing.enabled` to `true` only after a provider and at least one catalog-validated rule are configured. `routing.swap` chooses what routing changes: `model` (default) switches to the model a rule names, `effort` keeps the model and sets the reasoning effort `effort.levels` gives the request's class, with no rules needed (in Claude Code this needs the mod). Configuration accepts JSON, or TOML when the file name ends in `.toml`. See `docs/CONFIGURATION.md` for all fields.
+Routing is off until `system1router toggle on` (`routing.enabled`). The effort swap needs no rules; the model swap needs a provider and at least one catalog-validated rule. `routing.swap` chooses what routing changes: `model` switches to the model a rule names, `effort` (default) keeps the model and sets the reasoning effort `effort.levels` gives the request's class, with no rules needed (in Claude Code this needs the mod). Configuration accepts JSON, or TOML when the file name ends in `.toml`. See `docs/CONFIGURATION.md` for all fields.
 
 Installing the plugin is intentionally not the same as enabling routing: installation must not change a host’s model or send prompts to a provider before the user configures consent, privacy, provider credentials, and policy. On the first OpenCode message, the plugin displays a one-time status notification explaining that routing is disabled. Run `system1router doctor` to inspect the state, then enable routing after provider setup.
 
@@ -141,7 +140,7 @@ One background process (`system1router model serve`) holds the model for every C
 }
 ```
 
-The model's three files (`<model>.json`, `<model>.onnx` and `<model>.tokenizer.json`) are stored with [Git LFS](https://git-lfs.com) in `models/`. Install `git-lfs` before cloning (or run `git lfs pull` after), and `cargo install --path .` builds a binary that installs the model from that checkout. `url` (a folder URL) or `system1router provider local --from <folder or URL>` points elsewhere. The files land in `~/.local/share/system1router/models/<model>/`. Unlike Jev, the model predicts an effort, not a class: in an effort swap the router applies it as is (through the class that `effort.levels` maps to it); `routing.classSelection` picks the top effort (`argmax`), the median, or the highest effort holding 20% of the probability (`upper`).
+The model's three files (`<model>.json`, `<model>.onnx` and `<model>.tokenizer.json`) are in this repository's `models/` folder (Git LFS) and are downloaded from GitHub on first use; a binary built from a checkout with the files present copies them from there. `url` (a folder URL or path) or `system1router provider local --from <folder or URL>` points elsewhere.
 
 ## Install Host Hooks
 
