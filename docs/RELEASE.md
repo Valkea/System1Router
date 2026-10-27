@@ -10,7 +10,7 @@ A release ships the `system1router` binary for Linux and macOS (GitHub release, 
    cargo publish --dry-run
    ```
 
-3. Tag and push. `.github/workflows/release.yml` tests and builds `x86_64` and `aarch64` for Linux and macOS, then creates the release with `system1router-<target>.tar.gz` and `SHA256SUMS`:
+3. Tag and push. `.github/workflows/release.yml` tests and builds Linux (`x86_64`, `aarch64`, on Ubuntu 24.04: ONNX Runtime needs glibc 2.38) and Apple Silicon macOS, then creates the release with `system1router-<target>.tar.gz` and `SHA256SUMS`:
 
    ```sh
    git tag v0.2.0 && git push origin v0.2.0
@@ -20,4 +20,4 @@ A release ships the `system1router` binary for Linux and macOS (GitHub release, 
 
 A new model gets a new name (`ettin-32m-effort-v2`): upload its three files to the Hugging Face repository (`hf upload Valkea/System1Router-effort <package folder> .`), change the default `providers.local.model` in `src/config.rs`, and release. Installed copies of the old model are never overwritten in place.
 
-Windows is not built: the shared model process uses Unix sockets.
+Windows is not built: the shared model process uses Unix sockets. Intel macOS is not built: ONNX Runtime (through the `ort` crate) ships no prebuilt library for it.

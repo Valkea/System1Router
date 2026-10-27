@@ -1,7 +1,7 @@
 name: release
 
 # On a version tag (v0.2.0), builds the system1router binary for Linux and
-# macOS and attaches the archives and their checksums to a GitHub release,
+# Apple Silicon macOS and attaches the archives and their checksums to a GitHub release,
 # which install.sh downloads.
 on:
   push:
@@ -20,8 +20,8 @@ jobs:
           # ONNX Runtime's prebuilt library needs glibc 2.38: Ubuntu 24.04 or newer.
           - { target: x86_64-unknown-linux-gnu, os: ubuntu-24.04 }
           - { target: aarch64-unknown-linux-gnu, os: ubuntu-24.04-arm }
+          # No Intel macOS build: ONNX Runtime ships no prebuilt library for it.
           - { target: aarch64-apple-darwin, os: macos-14 }
-          - { target: x86_64-apple-darwin, os: macos-15-intel }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5

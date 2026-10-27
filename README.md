@@ -5,7 +5,7 @@
 [![Model on Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97%20model-System1Router--effort-yellow)](https://huggingface.co/Valkea/System1Router-effort)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Rust 1.89+](https://img.shields.io/badge/rust-1.89%2B-orange.svg)
-![Platforms](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-lightgrey.svg)
+![Platforms](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20(Apple%20Silicon)-lightgrey.svg)
 ![Works with Claude Code and OpenCode](https://img.shields.io/badge/works%20with-Claude%20Code%20%7C%20OpenCode-8A2BE2.svg)
 
 **Sets the reasoning effort of every prompt you send to Claude Code or OpenCode, automatically.**
@@ -31,7 +31,7 @@ Under the hood, the `system1router` executable reads one JSON event on stdin and
 
 ## Install
 
-On macOS, or Linux with glibc 2.38 or newer (Ubuntu 24.04, Debian 13, Fedora 39):
+On Apple Silicon macOS, or Linux (x86_64 or arm64) with glibc 2.38 or newer (Ubuntu 24.04, Debian 13, Fedora 39):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Valkea/System1Router/main/install.sh | sh
