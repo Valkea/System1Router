@@ -4,6 +4,40 @@ System1Router is a fail-open, context-aware model-routing core for AI coding cli
 
 ## Build
 
+### Quick start: effort routing with the local model
+
+On a new machine (Linux or macOS), with Rust 1.78 or newer:
+
+```sh
+# 1. Git LFS first: the local model (models/, 130 MB) is stored with it
+sudo apt install git-lfs        # macOS: brew install git-lfs
+git lfs install
+
+# 2. Clone and build
+git clone https://github.com/Valkea/System1Router.git
+cd System1Router
+cargo install --path . --locked
+
+# 3. Turn routing on: effort swap, classified by the local model
+mkdir -p ~/.config/system1router
+cat > ~/.config/system1router/config.json <<'JSON'
+{
+  "routing": { "enabled": true, "swap": "effort" },
+  "providers": { "selected": "local" },
+  "consent": { "style": "menu" }
+}
+JSON
+system1router model install     # copies the model from models/ in this checkout
+
+# 4. Hook into Claude Code and OpenCode, then restart them
+system1router install
+system1router doctor
+```
+
+Keep the checkout where it is: the binary installs the model from its `models/` folder. If the clone was made before Git LFS was installed, run `git lfs pull` in it, then `system1router model install` again. An existing config only needs `system1router provider local`. `system1router toggle off` pauses routing; `system1router consent auto|confirm|menu` picks how a new effort is confirmed.
+
+The previous model-switching router lives on the `model-routing` branch.
+
 ### From source
 
 The repository currently ships source packages rather than prebuilt release archives. Install Rust 1.78 or newer, then install the executable into Cargo's binary directory:

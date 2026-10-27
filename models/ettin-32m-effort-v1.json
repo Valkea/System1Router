@@ -1,0 +1,27 @@
+{
+ "name": "ettin-32m-effort-v1",
+ "base": null,
+ "efforts": [
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max"
+ ],
+ "maxLength": 256,
+ "contextChars": 4000,
+ "cls": 50281,
+ "sep": 50282,
+ "files": {
+  "onnx": {
+   "name": "ettin-32m-effort-v1.onnx",
+   "bytes": 129405337,
+   "sha256": "940f313b8378af1484be58c3d9c75ed9708662ee76abfe121298615bd9f05be9"
+  },
+  "tokenizer.json": {
+   "name": "ettin-32m-effort-v1.tokenizer.json",
+   "bytes": 3583228,
+   "sha256": "6c8aaa9a542084f2457eab775d4eeb51f92a70c0fd9de28d5edb0ddec3c08d30"
+  }
+ }
+}
