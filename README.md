@@ -31,21 +31,28 @@ Under the hood, the `system1router` executable reads one JSON event on stdin and
 
 ## Install
 
-On Apple Silicon macOS, or Linux (x86_64 or arm64) with glibc 2.38 or newer (Ubuntu 24.04, Debian 13, Fedora 39):
+### 1. Get the binary: pick one
+
+| | **Prebuilt binary** (no Rust needed) | **Cargo** (builds from crates.io) |
+|---|---|---|
+| Command | `curl -fsSL https://raw.githubusercontent.com/Valkea/System1Router/main/install.sh \| sh` | `cargo install system1router` |
+| Needs | Apple Silicon macOS, or Linux x86_64/arm64 with glibc 2.38+ (Ubuntu 24.04, Debian 13, Fedora 39) | Rust 1.89+, on the same systems (ONNX Runtime has no Intel Mac or older-glibc build) |
+| Installs to | `~/.local/bin` (`SYSTEM1ROUTER_INSTALL_DIR` to change) | `~/.cargo/bin` |
+| Update | run the same command again | `system1router update` (`--check` only reports) |
+
+`install.sh` downloads the binary for your system from the [latest release](https://github.com/Valkea/System1Router/releases/latest) and checks its SHA-256 before installing it.
+
+### 2. Set it up
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Valkea/System1Router/main/install.sh | sh
 system1router install      # Claude Code mod, OpenCode plugin, and the local model (130 MB)
 system1router toggle on
 ```
 
 Then restart Claude Code and OpenCode. The status line shows `S1R on · Ettin`, and each prompt shows the effort it was given.
 
-- `install.sh` downloads the binary for your system from the [latest release](https://github.com/Valkea/System1Router/releases/latest), checks its SHA-256, and puts it in `~/.local/bin` (`SYSTEM1ROUTER_INSTALL_DIR` to change).
 - `system1router install` asks which assistants and which scope (all projects or this one), then downloads the model into `~/.local/share/system1router/models/`. In Claude Code it installs the mod into `~/.local/share/system1router/claude-code-mod` and names it in `env.CLAUDE_CODE_PLUGIN_DIRS` of `~/.claude/settings.json`.
 - `system1router toggle on` writes `~/.config/system1router/config.json` if it does not exist. Defaults: effort routing, local model, ask before changing the effort. `system1router consent auto|confirm|menu` changes how a new effort is confirmed; `system1router doctor` checks the setup.
-
-With Rust 1.89 or newer, `cargo install system1router` builds the same binary instead of `install.sh`. `system1router update` later installs a newer published version (`--check` only reports it).
 
 ### From source
 
