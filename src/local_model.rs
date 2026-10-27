@@ -28,18 +28,14 @@ pub fn socket_path() -> Option<PathBuf> {
 
 pub fn installed(local: &LocalConfig) -> bool { model_directory(local).is_some_and(|dir| ["model.onnx", "tokenizer.json", "model.json"].iter().all(|file| dir.join(file).is_file())) }
 
-/// The repository's `models/` folder; GitHub serves its Git LFS files from here.
-pub const MODELS_URL: &str = "https://github.com/Valkea/System1Router/raw/main/models";
+/// Where the published models live (Hugging Face).
+pub const MODELS_URL: &str = "https://huggingface.co/Valkea/System1Router-effort/resolve/main";
 
 /// Fetches `<name>.json`, `<name>.onnx` and `<name>.tokenizer.json` from `from`: a
-/// URL or a local folder. Without one, from `providers.local.url`, then from the
-/// `models/` folder (Git LFS) of the checkout the binary was built from, then
-/// from that folder on GitHub.
+/// URL or a local folder. Without one, from `providers.local.url`, then from
+/// [`MODELS_URL`].
 pub fn install(local: &LocalConfig, from: Option<&str>) -> Result<PathBuf, String> {
-    let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).join("models");
-    // A clone without Git LFS holds pointers, not the weights: download those instead.
-    let bundled = fs::metadata(checkout.join(format!("{}.onnx", local.model))).is_ok_and(|file| file.len() > 1 << 20).then(|| checkout.to_string_lossy().into_owned());
-    let source = from.map(str::to_owned).or_else(|| local.url.clone()).or(bundled).unwrap_or_else(|| MODELS_URL.into());
+    let source = from.map(str::to_owned).or_else(|| local.url.clone()).unwrap_or_else(|| MODELS_URL.into());
     let dir = model_directory(local).ok_or("no data directory (HOME is not set)")?;
     fs::create_dir_all(&dir).map_err(|error| format!("create {}: {error}", dir.display()))?;
     let name = &local.model;
@@ -47,7 +43,6 @@ pub fn install(local: &LocalConfig, from: Option<&str>) -> Result<PathBuf, Strin
     for (kind, target) in [("onnx", "model.onnx"), ("tokenizer.json", "tokenizer.json")] {
         let file = manifest["files"][kind]["name"].as_str().ok_or(format!("{name}.json lists no {kind} file"))?;
         let bytes = fetch(&source, file)?;
-        if bytes.starts_with(b"version https://git-lfs") { return Err(format!("{file} is a Git LFS pointer, not the file: run `git lfs pull` in the checkout")); }
         if manifest["files"][kind]["bytes"].as_u64().is_some_and(|size| size != bytes.len() as u64) { return Err(format!("{file}: got {} bytes, the manifest says {}", bytes.len(), manifest["files"][kind]["bytes"])); }
         write_private(&dir.join(target), &bytes)?;
     }
@@ -317,12 +312,10 @@ mod tests {
         let event: NormalizedEvent = serde_json::from_value(json!({ "protocolVersion": "1", "host": "generic", "event": "user_prompt", "sessionId": "s", "request": { "query": "hi" } })).unwrap();
         let missing = classify(&event, &config);
         let wrong_size = { fs::write(release.join("m.onnx"), b"truncated").unwrap(); let result = install(&local, release.to_str()); fs::write(release.join("m.onnx"), b"onnx").unwrap(); result };
-        let pointer = { fs::write(release.join("m.onnx"), b"version https://git-lfs.github.com/spec/v1\n").unwrap(); let result = install(&local, release.to_str()); fs::write(release.join("m.onnx"), b"onnx").unwrap(); result };
         let installed_to = install(&local, release.to_str());
         match previous { Some(value) => env::set_var("XDG_DATA_HOME", value), None => env::remove_var("XDG_DATA_HOME") }
         assert!(matches!(missing, Err(ProviderError::Unavailable(_))));
         assert!(wrong_size.is_err_and(|error| error.contains("bytes")));
-        assert!(pointer.is_err_and(|error| error.contains("git lfs pull")));
         let dir = installed_to.unwrap();
         assert_eq!(fs::read(dir.join("model.onnx")).unwrap(), b"onnx");
         assert!(dir.join("tokenizer.json").is_file() && dir.join("model.json").is_file());

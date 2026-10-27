@@ -1,6 +1,6 @@
 # Release and Packaging
 
-A release ships the `system1router` binary for Linux and macOS (GitHub release, used by `install.sh`) and the crate (crates.io, used by `cargo install system1router` and `system1router update`). The local model is not part of either: it stays in `models/` (Git LFS) and the binary downloads it from GitHub on first use.
+A release ships the `system1router` binary for Linux and macOS (GitHub release, used by `install.sh`) and the crate (crates.io, used by `cargo install system1router` and `system1router update`). The local model is not part of either: the binary downloads it from [Valkea/System1Router-effort](https://huggingface.co/Valkea/System1Router-effort) on Hugging Face.
 
 1. Bump `version` in `Cargo.toml`, run all checks (see `CLAUDE.md`), commit.
 2. Check the crate holds the sources the binary embeds (OpenCode plugin, Claude Code mod) and nothing else:
@@ -18,6 +18,6 @@ A release ships the `system1router` binary for Linux and macOS (GitHub release, 
 
 4. Publish the crate: `cargo publish` (needs `cargo login` once).
 
-A new model gets a new name (`ettin-32m-effort-v2`): add its three files to `models/`, change the default `providers.local.model` in `src/config.rs`, and release. Installed copies of the old model are never overwritten in place.
+A new model gets a new name (`ettin-32m-effort-v2`): upload its three files to the Hugging Face repository (`hf upload Valkea/System1Router-effort <package folder> .`), change the default `providers.local.model` in `src/config.rs`, and release. Installed copies of the old model are never overwritten in place.
 
 Windows is not built: the shared model process uses Unix sockets.

@@ -8,8 +8,8 @@ Writes, into <out dir>:
   <name>.tokenizer.json  the Hugging Face tokenizer
   <name>.json            the manifest: efforts, input layout, file sizes
 
-These go into the repository's models/ folder (Git LFS), or any folder or
-URL `providers.local.url` points at. The input layout must match
+These are uploaded to the Hugging Face model repository the router
+downloads from, or any folder or URL `providers.local.url` points at. The input layout must match
 train_classifier.encode, which the router reproduces.
 """
 from __future__ import annotations

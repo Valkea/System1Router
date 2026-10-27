@@ -46,7 +46,7 @@ cd System1Router
 cargo install --path . --locked
 ```
 
-The model is stored with [Git LFS](https://git-lfs.com) in `models/`. With `git-lfs` installed before cloning, a binary built from the checkout installs the model from it; without it, the model is downloaded from GitHub. For a checkout without installing, use `cargo run --` in place of `system1router`.
+For a checkout without installing, use `cargo run --` in place of `system1router`.
 
 The earlier model-switching router lives on the `model-routing` branch.
 
@@ -140,7 +140,7 @@ One background process (`system1router model serve`) holds the model for every C
 }
 ```
 
-The model's three files (`<model>.json`, `<model>.onnx` and `<model>.tokenizer.json`) are in this repository's `models/` folder (Git LFS) and are downloaded from GitHub on first use; a binary built from a checkout with the files present copies them from there. `url` (a folder URL or path) or `system1router provider local --from <folder or URL>` points elsewhere.
+The model's three files (`<model>.json`, `<model>.onnx` and `<model>.tokenizer.json`) are downloaded from [Valkea/System1Router-effort](https://huggingface.co/Valkea/System1Router-effort) on Hugging Face, which also has the model card. `url` (a folder URL or path) or `system1router provider local --from <folder or URL>` points elsewhere.
 
 ## Install Host Hooks
 
