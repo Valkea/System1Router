@@ -82,6 +82,12 @@ export function sameModel(current: string, target: string): boolean {
   return current === target || current.split(/[-.[]/).includes(target)
 }
 
+/** The pattern of `routing.skipModels` naming this model, as the router matches it. */
+export function skipped(patterns: readonly string[] | undefined, model: string): string | undefined {
+  const name = model.split('/').pop() ?? model
+  return patterns?.find(pattern => (pattern.endsWith('*') ? name.startsWith(pattern.slice(0, -1)) : sameModel(name, pattern)))
+}
+
 /** Prompts a person wrote; notifications, peers and plugins are not routed. */
 function typed(origin: PromptOrigin): boolean {
   return origin.kind === 'composer' || origin.kind === 'bridge' || origin.kind === 'sdk' || (origin.kind === 'plugin' && origin.asUser === true)
@@ -108,6 +114,7 @@ function tag(decision: Decision): string {
 
 function idle(decision: Decision): string {
   if (decision.code === 'disabled') return 'S1R off'
+  if (decision.code === 'model_skipped') return `S1R off for ${decision.current ? short(decision.current) : 'this model'}`
   if (decision.routingClass && (decision.code === 'effort_unchanged' || (decision.code === 'cache_sticky' && decision.effort))) {
     const now = `${decision.currentEffort ?? 'session'} effort`
     return `${tag(decision)} · ${now}${decision.code === 'cache_sticky' ? ` kept for the cache (not ${decision.effort})` : ''}`
@@ -202,6 +209,14 @@ async function consent($: EngineInterface, args: string): Promise<string> {
   return text
 }
 
+/** `/s1router_skip [add|remove MODEL]`; alone, turns routing off or back on for the session's model. */
+async function skip($: EngineInterface, args: string): Promise<string> {
+  const words = args.trim().split(/\s+/).filter(Boolean)
+  const text = await run($, words.length > 0 ? ['skip', ...words] : ['skip', 'toggle', await $.session.model()])
+  await refresh($)
+  return text
+}
+
 async function forget($: EngineInterface, key?: string): Promise<void> {
   await run($, key ? ['forget', key] : ['forget'])
   await refresh($)
@@ -244,6 +259,8 @@ async function steer($: EngineInterface, e: TurnStepInput): Promise<Effort | und
 /** Asks when needed and returns the model the turn should use, if another. */
 async function settle($: EngineInterface, decision: Decision): Promise<Choice | undefined> {
   const { model, current } = decision
+  // A skipped model runs at the session's own effort, not one held from before.
+  if (decision.code === 'model_skipped') await update($, effortState, s => ({ ...s, applied: null }))
   if (decision.action === 'none' || !model || !current) {
     $.ui.status(idle(decision))
     return undefined
@@ -361,6 +378,7 @@ export const register: Register = (on, options) => {
     if (!known.has('s1router_toggle')) await $.command.register({ name: 's1router_toggle', description: 'Toggle System1Router routing on/off', argumentHint: '[on|off]' })
     if (!known.has('s1router_config')) await $.command.register({ name: 's1router_config', description: 'Show System1Router status, config and log paths' })
     if (!known.has('s1router_stats')) await $.command.register({ name: 's1router_stats', description: 'Show System1Router calls per model and suggestion acceptance' })
+    await $.command.register({ name: 's1router_skip', description: "Turn System1Router off (or back on) for this session's model", argumentHint: '[add|remove MODEL]' })
     await $.command.register({ name: 's1router_consent', description: 'How System1Router confirms an effort: auto, confirm or menu', argumentHint: '[auto|confirm|menu] [ask-below 80%|off]' })
     const data = await refresh($)
     $.ui.status(data ? (data.status.enabled ? `S1R on · ${data.status.classifier ?? data.status.provider}` : 'S1R off') : 'S1R unavailable')
@@ -511,6 +529,8 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 's1router_consent' }, async ($, e) => ({ text: e.args.trim() ? await consent($, e.args) : await pickConsent($) }))
 
+  on('command.run', { command: 's1router_skip' }, async ($, e) => ({ text: await skip($, e.args) }))
+
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
     const data = await read($, panel)
@@ -518,13 +538,14 @@ export const register: Register = (on, options) => {
     const failure = await read($, problem)
     const held = await read($, effortState)
     const spent = await read($, costs)
+    const model = await $.session.model()
     const width = Math.max(30, e.props.bodyColumns ?? 60)
     // The terminal reports clicks only in its fullscreen layout; elsewhere the
     // pane is used from the keyboard once it holds the focus.
     const keys = e.props.isFocused
-      ? 't, r, c, q or Tab and Enter · Esc closes'
+      ? 't, r, c, m, q or Tab and Enter · Esc closes'
       : e.surface === 'terminal' && e.viewport?.isFullscreen !== true
-        ? 'ctrl+x tab to use the buttons (then t, r, c, q or Tab and Enter) · ctrl+x x closes'
+        ? 'ctrl+x tab to use the buttons (then t, r, c, m, q or Tab and Enter) · ctrl+x x closes'
         : null
 
     if (!data) {
@@ -561,11 +582,13 @@ export const register: Register = (on, options) => {
           {/* auto → confirm → menu */}
           <Button key="consent" hotkey="c" plain label={`Consent: ${consentLabel(status)}`} onPress={() => consent($, status.consentMode === 'always-accept' ? 'confirm' : status.consentStyle === 'menu' ? 'auto' : 'menu')} />
           <Text>  </Text>
+          <Button key="skip" hotkey="m" plain label={skipped(status.skipModels, model) ? `Route ${short(model)}` : `Off for ${short(model)}`} onPress={() => skip($, '')} />
+          <Text>  </Text>
           <Button key="close" hotkey="q" plain role="dismiss" label="Close" onPress={() => closePane($)} />
         </Box>
         {keys && <Text dimColor>{keys}</Text>}
         <Text dimColor>
-          Classifier {status.classifierLabel ?? status.provider}{status.providerReady ? '' : ' (not configured)'} · {status.rules} rules ({status.claudeCodeRules} for Claude Code) · consent {consentLabel(status)}
+          Classifier {status.classifierLabel ?? status.provider}{status.providerReady ? '' : ' (not configured)'} · {status.rules} rules ({status.claudeCodeRules} for Claude Code) · consent {consentLabel(status)}{status.skipModels?.length ? ` · off for ${status.skipModels.join(', ')}` : ''}
         </Text>
         {failure && <Text color="red">{failure}</Text>}
 

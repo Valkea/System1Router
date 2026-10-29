@@ -66,6 +66,17 @@ fn read_config_value(path: &Path, section: &str, key: &str) -> Result<Option<Val
     Ok(root.get(section).and_then(|section| section.get(key)).cloned())
 }
 
+/// Adds or removes a model in `routing.skipModels`, which routing leaves
+/// alone. Returns the resulting list as a sentence.
+pub fn set_skip(path: &Path, add: Option<&str>, remove: Option<&str>) -> Result<String, String> {
+    let mut models: Vec<String> = read_config_value(path, "routing", "skipModels")?.and_then(|value| serde_json::from_value(value).ok()).unwrap_or_default();
+    let before = models.clone();
+    if let Some(model) = add.map(str::trim).filter(|model| !model.is_empty()) { if !models.iter().any(|known| known == model) { models.push(model.into()); } }
+    if let Some(model) = remove { models.retain(|known| known != model && !crate::config::skip_matches(known, model)); }
+    if models != before { set_config(path, "routing", &[("skipModels", if models.is_empty() { Value::Null } else { Value::from(models.clone()) })])?; }
+    Ok(if models.is_empty() { "routes every model".into() } else { format!("leaves alone {}", models.join(", ")) })
+}
+
 /// Sets `section.key` for each pair (null removes it). JSON keeps its key
 /// order; TOML is edited in place so its comments and layout survive. The
 /// file is replaced atomically.
@@ -224,6 +235,7 @@ pub fn panel(config: &Config, path: Option<&Path>) -> Value {
             "consentStyle": config.consent.style,
             "askBelow": config.consent.ask_below,
             "swap": config.routing.swap,
+            "skipModels": config.routing.skip_models,
             "efforts": crate::protocol::RoutingClass::ALL.iter().map(|class| (class.as_str(), config.effort.level(class))).collect::<BTreeMap<_, _>>(),
             "configPath": path,
             "providerLog": provider_log_path(),
@@ -316,6 +328,24 @@ mod tests {
         assert_eq!(classifier_label(&config), "Ettin (local model ettin-32m-effort-v1)");
         assert!(status_text(&config, None).contains("classifier Ettin (local model ettin-32m-effort-v1)"));
         assert_eq!(panel(&config, None)["status"]["classifier"], "Ettin");
+    }
+
+    #[test]
+    fn skipped_models_are_added_once_and_removed_by_name_or_pattern() {
+        let dir = std::env::temp_dir().join(format!("s1r-skip-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let path = dir.join("config.json");
+        assert_eq!(set_skip(&path, Some("claude-fable-*"), None).unwrap(), "leaves alone claude-fable-*");
+        assert_eq!(set_skip(&path, Some("opus"), None).unwrap(), "leaves alone claude-fable-*, opus");
+        assert_eq!(set_skip(&path, Some("opus"), None).unwrap(), "leaves alone claude-fable-*, opus");
+        assert_eq!(set_skip(&path, None, Some("claude-fable-5-1")).unwrap(), "leaves alone opus");
+        assert_eq!(set_skip(&path, None, Some("opus")).unwrap(), "routes every model");
+        assert_eq!(serde_json::from_str::<Value>(&fs::read_to_string(&path).unwrap()).unwrap()["routing"], serde_json::json!({}));
+        let toml = dir.join("config.toml");
+        fs::write(&toml, "[routing]\nenabled = true\n").unwrap();
+        set_skip(&toml, Some("opus"), None).unwrap();
+        assert_eq!(Config::load(Some(&toml)).unwrap().routing.skip_models, vec!["opus".to_string()]);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

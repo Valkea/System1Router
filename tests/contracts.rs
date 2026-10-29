@@ -41,6 +41,22 @@ fn policy_and_runtime_preserve_declined_request() {
 }
 
 #[test]
+fn a_skipped_model_is_never_classified() {
+    let mut config = Config::default();
+    config.routing.enabled = true;
+    config.providers.selected = "jev".into();
+    config.routing.skip_models = vec!["opus".into(), "claude-fable-*".into()];
+    let provider = StaticProvider { result: Ok(classification(RoutingClass::CodeHard)) };
+    for model in ["claude-opus-5-5", "anthropic/claude-fable-5-1"] {
+        let event = normalize(Host::Generic, json!({ "prompt": "fix it", "sessionId": "s", "model": model, "provider": "anthropic" }), None);
+        let decision = process_event(&event, &config, &provider);
+        assert_eq!((decision.outcome, decision.diagnostic.code.as_str()), (DecisionOutcome::Bypass, "model_skipped"), "{model}");
+    }
+    let event = normalize(Host::Generic, json!({ "prompt": "fix it", "sessionId": "s", "model": "claude-sonnet-5-5", "provider": "anthropic" }), None);
+    assert_ne!(process_event(&event, &config, &provider).diagnostic.code, "model_skipped");
+}
+
+#[test]
 fn unavailable_provider_fails_open_without_recommendation() {
     let config = Config::default();
     let event = normalize(Host::Generic, json!({ "prompt": "question", "sessionId": "s" }), None);

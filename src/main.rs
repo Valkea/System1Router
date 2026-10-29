@@ -56,6 +56,19 @@ fn main() {
                 Err(error) => println!("System1Router: {error}"),
             }
         }
+        // `skip [add|remove|toggle MODEL]`: models routing leaves alone.
+        Some("skip") => {
+            let Some(path) = config_path.clone().or_else(system1router_core::config::default_config_path) else { println!("System1Router: no config path; set SYSTEM1ROUTER_CONFIG."); return; };
+            let words: Vec<&str> = args.iter().enumerate().skip(1).filter(|(index, word)| !word.starts_with("--") && !args[index - 1].starts_with("--")).map(|(_, word)| word.as_str()).collect();
+            let result = match (words.first().copied(), words.get(1).copied()) {
+                (None, _) => control::set_skip(&path, None, None),
+                (Some("add"), Some(model)) => control::set_skip(&path, Some(model), None),
+                (Some("remove"), Some(model)) => control::set_skip(&path, None, Some(model)),
+                (Some("toggle"), Some(model)) => if config.routing.skipped(model).is_some() { control::set_skip(&path, None, Some(model)) } else { control::set_skip(&path, Some(model), None) },
+                _ => Err("use skip, skip add|remove|toggle MODEL (an id, an alias such as opus, or a prefix ending in *)".into()),
+            };
+            match result { Ok(text) => println!("System1Router {text}."), Err(error) => println!("System1Router: {error}") }
+        }
         // `provider [jev|local]`: the classifier; `local` installs the model first.
         Some("provider") => {
             let Some(path) = config_path.clone().or_else(system1router_core::config::default_config_path) else { println!("System1Router: no config path; set SYSTEM1ROUTER_CONFIG."); return; };
@@ -133,7 +146,8 @@ fn print_help() {
     println!("  gateway                                               Start the optional routing gateway");
     println!("  toggle [on|off]                                       Turn routing on or off (also /s1router_toggle)");
     println!("  consent [auto|confirm|menu] [--ask-below 0.8|off]     How effort suggestions are confirmed (also /s1router_consent)");
-    println!("  provider [jev|local] [--from DIR|URL]                 Classify with Jev or the local model (downloads it)");
+    println!("  skip [add|remove|toggle MODEL]                        Models routing leaves alone (also /s1router_skip)
+  provider [jev|local] [--from DIR|URL]                 Classify with Jev or the local model (downloads it)");
     println!("  model install|start|status|stop [--from DIR|URL]      Manage the shared local model process");
     println!("  status | stats                                        Show routing status or usage stats");
     println!("  decide | choice | panel | forget [KEY]                Used by the Claude Code mod (JSON)");

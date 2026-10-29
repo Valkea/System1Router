@@ -57,6 +57,8 @@ export type Panel = {
     askBelow?: number | null
     /** What a decision changes (`routing.swap`). */
     swap: 'model' | 'effort'
+    /** Models routing leaves alone (`routing.skipModels`): ids, aliases or prefixes ending in `*`. */
+    skipModels?: string[]
     /** Effort per routing class (`effort.levels` and defaults). */
     efforts: Record<string, string>
     configPath: string | null

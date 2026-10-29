@@ -366,3 +366,32 @@ test('/s1router_consent alone opens a dialog to choose', async ($, on) => {
   await $.command.run({ command: 's1router_consent', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } })
   expect(state.calls.at(-1)).toEqual(['consent'])
 })
+
+test('a skipped model drops the held effort and says routing is off for it', async ($, on) => {
+  const state = engine(on, { ...EFFORT, action: 'switch' })
+  expect((await turn($, state, 'fix the race', 'turn-1')).effort).toBe('xhigh')
+  state.decision = { action: 'none', record: false, current: 'claude-sonnet-5-5', currentEffort: 'xhigh', code: 'model_skipped' }
+  expect((await turn($, state, 'and the other one', 'turn-2')).effort).toBe('medium')
+  expect(state.statuses.at(-1)).toBe('S1R off for sonnet 5.5')
+})
+
+test("/s1router_skip turns routing off for the session's model and the pane shows it", async ($, on) => {
+  const state = engine(on, EFFORT)
+  await $.command.run({ command: 's1router_skip', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } })
+  const toggled = state.calls.find(call => call[0] === 'skip')
+  expect(toggled?.slice(0, 2)).toEqual(['skip', 'toggle'])
+  const model = toggled?.[2] ?? ''
+  expect(model).not.toBe('')
+  await $.command.run({ command: 's1router_skip', args: 'add claude-fable-*', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } })
+  expect(state.calls).toContainEqual(['skip', 'add', 'claude-fable-*'])
+  state.panel = { ...PANEL, status: { ...PANEL.status, skipModels: [model] } }
+  await $.command.run({ command: 's1router', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } })
+  const ui = await $.ui.mount({
+    plugin: 'system1router', surface: 'terminal', component: 'Pane', requestId: 's1router',
+    props: { title: 'System1Router', isFocused: true, bodyColumns: 120, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} },
+  })
+  expect(await ui.find({ text: /off for / })).toBeDefined()
+  await ui.press({ key: 'skip' })
+  expect(state.calls.filter(call => call[0] === 'skip')).toHaveLength(3)
+  await ui.unmount()
+})

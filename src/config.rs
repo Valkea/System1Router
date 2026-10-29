@@ -188,6 +188,19 @@ pub struct RoutingConfig {
     /// What a decision changes: the model, or only the current model's effort.
     #[serde(default)]
     pub swap: Swap,
+    /// Models routing leaves alone: ids, aliases (`opus`) or prefixes ending in `*`.
+    #[serde(default)]
+    pub skip_models: Vec<String>,
+}
+
+impl RoutingConfig {
+    /// The pattern in `skip_models` that names this model, if any.
+    pub fn skipped(&self, model: &str) -> Option<&str> { self.skip_models.iter().map(String::as_str).find(|pattern| skip_matches(pattern, model)) }
+}
+
+pub fn skip_matches(pattern: &str, model: &str) -> bool {
+    let model = model.rsplit('/').next().unwrap_or(model);
+    match pattern.strip_suffix('*') { Some(prefix) => model.starts_with(prefix), None => crate::claude_code::same_model(model, pattern) }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -257,7 +270,7 @@ pub enum ClassSelection {
     Upper,
 }
 
-impl Default for RoutingConfig { fn default() -> Self { Self { enabled: false, default_mode: RoutingMode::Advisory, fail_open: true, min_confidence: 0.0, allowed_task_types: Vec::new(), class_selection: ClassSelection::default(), cache_aware: true, swap: Swap::default() } } }
+impl Default for RoutingConfig { fn default() -> Self { Self { enabled: false, default_mode: RoutingMode::Advisory, fail_open: true, min_confidence: 0.0, allowed_task_types: Vec::new(), class_selection: ClassSelection::default(), cache_aware: true, swap: Swap::default(), skip_models: Vec::new() } } }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

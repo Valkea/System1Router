@@ -18,6 +18,11 @@ pub fn process_event(event: &NormalizedEvent, config: &Config, provider: &dyn De
     if !config.routing.enabled {
         return base(DecisionOutcome::Bypass, Diagnostic::info("disabled", "routing is disabled"), None, RoutingMode::Advisory, "disabled");
     }
+    if let Some(pattern) = event.current_model.as_ref().and_then(|current| config.routing.skipped(&current.model)) {
+        let mut decision = base(DecisionOutcome::Bypass, Diagnostic::info("model_skipped", format!("routing is off for {pattern}")), None, RoutingMode::Advisory, "model-skipped");
+        decision.diagnostic.details = serde_json::json!({ "pattern": pattern });
+        return decision;
+    }
     // Avoid paying provider latency (and sending text) when the answer cannot matter.
     if event.request.query.trim().is_empty() {
         return base(DecisionOutcome::Bypass, Diagnostic::info("empty_query", "the request has no text to classify"), None, RoutingMode::Advisory, "empty-query");
